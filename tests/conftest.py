@@ -164,3 +164,16 @@ def tmp_project_large(tmp_path):
             (d / f"file_{j}.py").write_text(f"# Module {i}, File {j}\n")
 
     return p
+
+
+@pytest.fixture
+def newfin_project():
+    """Real project fixture — points to /home/neil1988/newfin.
+
+    READ-ONLY fixture. Tests should use sandbox tools for any modifications.
+    Never write directly to this path.
+    """
+    p = Path("/home/neil1988/newfin")
+    if not p.exists():
+        pytest.skip("newfin project not available")
+    return p
