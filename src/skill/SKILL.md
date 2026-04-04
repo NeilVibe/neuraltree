@@ -441,3 +441,253 @@ Subcommands that skip phases should still indicate what was skipped:
 ```
 
 This ensures the user understands why the run is shorter than usual.
+
+---
+
+## Section 4: Benchmark Protocol
+
+> Measure before you fix. The Flow Score is the single number that tells you whether information is flowing or stuck.
+
+The Benchmark Protocol generates test queries, searches Viking for answers, judges relevance with LLM, computes structural metrics, and assembles a composite **Flow Score** (0.0–1.0). Every other section depends on this number.
+
+### Step 1: Generate Queries
+
+Generate test queries that probe the project's information structure. These queries simulate what an agent would actually ask during a working session.
+
+```
+scan_result = neuraltree_scan(project_root=".", include_contents=false)
+index_paths = [f for f in scan_result["files"] if f["name"] == "_INDEX.md"]
+
+result = neuraltree_generate_queries(
+    claude_md_path="CLAUDE.md",
+    memory_md_path="memory/MEMORY.md",
+    index_paths=[p["path"] for p in index_paths],
+    git_log_lines=100,
+    indexed_doc_count=scan_result["total_files"]
+)
+queries = result["queries"]
+```
+
+Emit: `Phase 2/5: Generating test queries... {result["total"]} queries from {result["sources"]} sources`
+
+**Spot-check mode filtering:** If mode is `spot-check`, load `.neuraltree/queries.json` and filter to only queries tagged `status: "critical"`. This reduces the benchmark to the most important probes — typically 5-10 queries instead of 30-50.
+
+```
+if mode == "spot-check":
+    import json
+    with open(".neuraltree/queries.json") as f:
+        cached = json.load(f)
+    queries = [q for q in cached if q.get("status") == "critical"]
+```
+
+### Step 2: Viking Search (Precision@3)
+
+For each query, call Viking to retrieve the top 3 most relevant results. This tests whether the project's indexed content actually answers the questions an agent would ask.
+
+```
+for query in queries:
+    viking_result = viking_search(query=query["text"], limit=3)
+    query["viking_results"] = viking_result["results"]
+```
+
+Emit progress every 10 queries: `Phase 2/5: Benchmarking... {completed}/{total} queries scored`
+
+**If `DEGRADED_MODE` is true:** Skip this entire step. Set `precision_at_3 = None`. Proceed directly to Step 4. Viking is unavailable — semantic search scoring is impossible.
+
+### Step 3: LLM-as-Judge
+
+For each Viking result from Step 2, judge whether the retrieved content is actually relevant to the query. This converts raw search results into a binary relevance signal.
+
+**For each query, for each of its 3 Viking results, evaluate with this exact prompt:**
+
+```
+RELEVANCE JUDGMENT
+Query: {query["text"]}
+Result file: {result["uri"]}
+Result content (first 50 lines): {result["content"][:50_lines]}
+
+Rubric: Would reading this file help answer the query?
+- YES if the file contains information directly useful for answering
+- NO if the file is unrelated or only tangentially mentions the topic
+
+Reply YES or NO only.
+```
+
+**Scoring rules:**
+- `YES` → 1 point
+- `NO` → 0 points
+- Malformed response (anything other than exactly "YES" or "NO") → 0 points (conservative — assume irrelevant)
+
+**Per-query score:** `query_precision = count(YES) / 3`
+
+**Aggregate metric:** `precision_at_3 = mean(query_precision for all queries)`
+
+This gives a float between 0.0 (Viking returns nothing useful) and 1.0 (every result for every query is relevant).
+
+**Store per-query results** for later use by `neuraltree_diagnose()`:
+```
+for query in queries:
+    query["precision"] = query_precision
+    query["judgments"] = [
+        {"uri": r["uri"], "relevant": judgment}
+        for r, judgment in zip(query["viking_results"], judgments)
+    ]
+```
+
+### Step 4: Structural Metrics
+
+Call the MCP server to compute the structural health metrics. These measure the tree's wiring, freshness, and pressure — independent of Viking search quality.
+
+```
+score_result = neuraltree_score(project_root=".")
+```
+
+Returns:
+- `metrics.hop_efficiency` (float, 0.0–1.0): fraction of files reachable in ≤2 hops
+- `metrics.synapse_coverage` (float, 0.0–1.0): fraction of files with valid `## Related` links
+- `metrics.dead_neuron_ratio` (float, 0.0–1.0): fraction of files with NO incoming references (inverted — higher = better, fewer dead neurons)
+- `metrics.freshness` (float, 0.0–1.0): fraction of files verified within 90 days
+- `metrics.trunk_pressure` (float, 0.0–1.0): trunk files under 100-line limit (higher = better, less pressure)
+- `flow_score_partial` (float): weighted sum of structural metrics ONLY (precision_at_3 excluded — that's our job)
+- `flow_score_weights`: the weight configuration used
+- `details`: per-file breakdown for diagnostics
+- `warnings`: any structural issues detected
+
+**Note:** `score_result` returns `precision_at_3: null` — the MCP server cannot compute it because it requires Viking + LLM judgment. We computed it in Steps 2-3. This is **integration point #1** from the handoff.
+
+### Step 5: Assemble Flow Score
+
+Combine the structural metrics (from MCP) with the semantic metric (from Viking + LLM judge) into the composite Flow Score. This is **integration point #5** — two-phase scoring.
+
+**Full mode (Viking available):**
+
+```
+Flow Score = (
+    hop_efficiency     * 0.25 +
+    precision_at_3     * 0.25 +
+    synapse_coverage   * 0.20 +
+    dead_neuron_ratio  * 0.15 +
+    freshness          * 0.10 +
+    trunk_pressure     * 0.05
+)
+```
+
+The MCP server already computed the structural portion as `flow_score_partial`. The Skill adds the semantic portion:
+
+```
+final_flow_score = score_result["flow_score_partial"] + (precision_at_3 * 0.25)
+```
+
+**Weight rationale:**
+- **hop_efficiency (0.25)** — the 0-1-2 hop rule is the fundamental guarantee. If files aren't reachable, nothing else matters.
+- **precision_at_3 (0.25)** — retrieval quality. A perfectly structured tree that Viking can't search is half-blind.
+- **synapse_coverage (0.20)** — wiring completeness. `## Related` links are the synapses that enable hop traversal.
+- **dead_neuron_ratio (0.15)** — orphan detection. Files nobody references are invisible to the network.
+- **freshness (0.10)** — staleness. Old unverified content degrades trust over time.
+- **trunk_pressure (0.05)** — index bloat. Important but less critical than the structural and semantic metrics.
+
+### Step 6: Record Baseline
+
+Store the complete metric snapshot as the `baseline` for before/after comparison. This snapshot is used by the Diagnose and AutoLoop sections to measure improvement.
+
+```
+baseline = {
+    "timestamp": now_iso8601(),
+    "mode": mode,
+    "flow_score": final_flow_score,
+    "precision_at_3": precision_at_3,
+    "structural": {
+        "hop_efficiency": score_result["metrics"]["hop_efficiency"],
+        "synapse_coverage": score_result["metrics"]["synapse_coverage"],
+        "dead_neuron_ratio": score_result["metrics"]["dead_neuron_ratio"],
+        "freshness": score_result["metrics"]["freshness"],
+        "trunk_pressure": score_result["metrics"]["trunk_pressure"]
+    },
+    "flow_score_partial": score_result["flow_score_partial"],
+    "query_count": len(queries),
+    "queries": queries,  # includes per-query precision and judgments
+    "warnings": score_result["warnings"]
+}
+```
+
+Emit: `Phase 2/5: Baseline Flow Score: {final_flow_score:.2f} ({status})`
+
+Where `{status}` is determined by:
+| Flow Score | Status |
+|------------|--------|
+| >= 0.90 | `EXCELLENT` |
+| 0.75–0.89 | `HEALTHY` |
+| 0.60–0.74 | `DEGRADED` |
+| < 0.60 | `CRITICAL` |
+
+### Step 7: Route by Score
+
+The Flow Score determines what happens next. Higher scores mean less intervention needed.
+
+| Flow Score | Status | Next Step |
+|------------|--------|-----------|
+| > 0.90 | Excellent | **spot-check mode:** report metrics and stop — project is healthy. **Other modes:** continue to Diagnose for targeted improvements. |
+| 0.75–0.90 | Healthy | Continue to Diagnose. The tree is working but has room for improvement. Focus on the lowest-scoring metrics. |
+| 0.60–0.74 | Degraded | Continue to Diagnose. Multiple areas need attention. The tree is functional but information flow is impaired. |
+| < 0.60 | Critical | Continue to Diagnose. Information flow is broken. Full intervention required — expect significant restructuring in AutoLoop. |
+
+**Routing logic:**
+```
+if mode == "spot-check" and final_flow_score > 0.90:
+    emit("Flow Score {score} — project is healthy. No intervention needed.")
+    release_lock()
+    stop()
+elif mode == "spot-check" and final_flow_score <= 0.90:
+    emit("WARNING: Flow Score dropped to {score} since last run. Upgrading to maintenance mode.")
+    mode = "maintenance"
+    # fall through to Diagnose
+else:
+    # all other modes: continue to Diagnose
+    pass
+```
+
+**Proceed to Section 5 (Diagnose) with the `baseline` object and updated `mode`.**
+
+---
+
+### Degraded Mode (No Viking)
+
+When Viking is unavailable (`DEGRADED_MODE = true`), the Benchmark Protocol operates in structure-only mode. This provides meaningful scoring but loses the semantic dimension.
+
+**What changes:**
+- **Steps 2-3 are skipped entirely.** No Viking search, no LLM-as-Judge, no precision_at_3.
+- **precision_at_3 = None** — not zero, not estimated. Explicitly null.
+
+**Degraded scoring formula:**
+
+Without precision_at_3, the weights must be redistributed across structural metrics only:
+
+```
+structure_reachability = (hop_efficiency + synapse_coverage) / 2
+
+Degraded Flow Score = (
+    structure_reachability * 0.45 +
+    dead_neuron_ratio      * 0.25 +
+    freshness              * 0.20 +
+    trunk_pressure         * 0.10
+)
+```
+
+**Why these weights:**
+- **structure_reachability (0.45)** — combines the two most important structural metrics. Without Viking, structural reachability is the primary signal.
+- **dead_neuron_ratio (0.25)** — elevated from 0.15 because orphan files are harder to find without semantic search.
+- **freshness (0.20)** — elevated from 0.10 because stale content is harder to detect without Viking verification.
+- **trunk_pressure (0.10)** — elevated from 0.05 because trunk quality matters more when semantic search is unavailable.
+
+**Degraded mode caps:** The degraded Flow Score is **capped at 0.75** — even a structurally perfect tree cannot score above HEALTHY without semantic verification. This prevents false confidence.
+
+**User warning (emitted once at benchmark start):**
+```
+WARNING: Operating in DEGRADED mode — Viking unavailable.
+Semantic search scoring disabled (precision_at_3 = null).
+EMBEDDING_GAP detection disabled in Diagnose phase.
+Flow Score capped at 0.75 (structure-only assessment).
+Recommendation: Start Viking and re-run for full assessment.
+```
+
+**Baseline recording in degraded mode:** Same as Step 6, but `precision_at_3` is stored as `null` and `mode_degraded: true` is added to the baseline object.
