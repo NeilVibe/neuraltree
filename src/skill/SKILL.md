@@ -96,8 +96,8 @@ Determine mode from this decision table:
 
 | Condition | Mode | Pipeline | Rationale |
 |-----------|------|----------|-----------|
-| No `state.json` | **bootstrap** | Benchmark → Diagnose → AutoLoop → Enforce | First run. Full analysis needed. |
-| `state.json` exists, `flow_score < 0.60` | **critical** | Benchmark → Diagnose → AutoLoop → Enforce | Information flow is broken. Full intervention. |
+| No `state.json` | **bootstrap** | Benchmark → Diagnose → AutoLoop (sandbox) → Enforce | First run. Full analysis needed. Sandbox mandatory. |
+| `state.json` exists, `flow_score < 0.60` | **critical** | Benchmark → Diagnose → AutoLoop (sandbox) → Enforce | Information flow is broken. Full intervention. Sandbox mandatory. |
 | `state.json` exists, `last_run > 7 days ago` | **health-check** | Benchmark → Diagnose → Fix if degraded → Enforce | Stale data. Re-evaluate everything. |
 | `state.json` exists, `last_run ≤ 7 days`, `flow_score > 0.90` | **spot-check** | Benchmark (critical queries only) | Project is healthy. Quick verification. |
 | `state.json` exists, `last_run ≤ 7 days`, `0.60 ≤ flow_score ≤ 0.90` | **maintenance** | Benchmark → Diagnose degraded areas → Enforce | Stable but imperfect. Targeted fixes. |
@@ -1044,20 +1044,22 @@ Check these **after every iteration**, not just at the end. The loop terminates 
 3. **Hard cap:** 10 iterations reached — prevent runaway loops regardless of score.
 4. **Exhausted:** All failures in the priority queue have been addressed or skipped via dedup guard.
 
-### Sandbox Mode (Optional)
+### Sandbox Mode
 
-For first runs on unknown projects or when flow_score < 0.60 (critical mode):
-- Consider using sandbox for maximum safety:
-  1. neuraltree_sandbox_create() → isolated copy
-  2. Run AutoLoop on sandbox copy
-  3. neuraltree_sandbox_diff() → review changes
-  4. User approves → neuraltree_sandbox_apply()
-  5. neuraltree_sandbox_destroy() → cleanup
+**Mandatory for:** bootstrap mode and critical mode (flow_score < 0.60)
+**Optional for:** health-check, maintenance, spot-check (backup/restore is sufficient)
 
-For health-check and maintenance modes: sandbox is optional (backup/restore provides sufficient safety).
+For bootstrap and critical modes, the AutoLoop MUST run in a sandbox:
+1. `neuraltree_sandbox_create()` → isolated copy of project
+2. Run the entire AutoLoop (Steps 1-9) on the sandbox copy
+3. After convergence: `neuraltree_sandbox_diff()` → review all changes
+4. Present diff to user for approval
+5. User approves → `neuraltree_sandbox_apply(actions=approved_changes)`
+6. `neuraltree_sandbox_destroy()` → cleanup
 
-Note: The current AutoLoop operates directly on project files with backup/restore as the safety net.
-Sandbox integration provides stronger isolation but adds complexity. Use when risk is high.
+For health-check and maintenance modes:
+- Sandbox is optional (use `--sandbox` flag to enable)
+- Default: backup/restore provides sufficient safety for small change sets
 
 ### Initialize
 
@@ -1191,18 +1193,33 @@ Before touching any file, create a restorable backup. This is the safety net tha
 
 **Note:** CONTENT_GAP and FOCUS_GAP are routed to HOLD in Step 1b and never reach this step. Only SYNAPSE_GAP, FRESHNESS_GAP, and EMBEDDING_GAP need backup handling here.
 
+**Important for SYNAPSE_GAP:** `neuraltree_wire()` modifies not just the target file but also its neighbors — it adds `## Related` links back to them. The backup must cover ALL files that will be modified.
+
 ```
 if failure.get("target_file") is None:
     # No target file resolved — skip backup
     pass
-else:
+elif failure["gap_type"] == "SYNAPSE_GAP":
+    # Pre-compute wire targets to know which neighbors will be modified
+    wire_preview = neuraltree_wire(
+        file_path=failure["target_file"],
+        all_leaf_paths=scan_result["files"],
+        project_root="."
+    )
+    backed_up_files = [failure["target_file"]] + [r["file"] for r in wire_preview.get("related", [])]
     backup_result = neuraltree_backup(
-        files=[failure["target_file"]],
+        files=backed_up_files,
+        project_root="."
+    )
+else:
+    backed_up_files = [failure["target_file"]]
+    backup_result = neuraltree_backup(
+        files=backed_up_files,
         project_root="."
     )
 ```
 
-**Important:** The backup captures the exact file state before the fix. If the fix makes things worse, Step 6 can restore to this exact state. Without backup, DISCARD would be impossible and every change would be permanent.
+**Important:** The backup captures the exact file state before the fix. If the fix makes things worse, Step 6 can restore to this exact state. Without backup, DISCARD would be impossible and every change would be permanent. For SYNAPSE_GAP, this includes neighbor files that will gain `## Related` links.
 
 #### Step 4: Execute the Fix
 
@@ -1365,12 +1382,13 @@ The fix failed to deliver meaningful improvement — or made things worse. Roll 
 else:
     if actual_delta < 0:
         emit(f"  WARNING: Fix caused regression (score decreased by {abs(actual_delta):.3f}). Rolling back.")
+    # Restore ALL files that were backed up this iteration (target + neighbors for SYNAPSE_GAP)
     restore_result = neuraltree_restore(
-        files=[failure["target_file"]],
+        files=backed_up_files,
         project_root="."
     )
     if restore_result.get("not_found"):
-        emit(f"WARNING: Could not restore {failure['target_file']} — backup not found. File may be in modified state.")
+        emit(f"WARNING: Could not restore some files: {restore_result['not_found']}. Files may be in modified state.")
     autoloop_state["discarded"].append({
         "gap_type": failure["gap_type"],
         "target": failure.get("target_file", ""),
@@ -1378,7 +1396,7 @@ else:
         "actual_delta": actual_delta,
         "ratio": ratio
     })
-    emit(f"  DISCARD — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f}), restored from backup")
+    emit(f"  DISCARD — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f}), restored {len(backed_up_files)} file(s) from backup")
 ```
 
 #### Step 7: Update Calibration
