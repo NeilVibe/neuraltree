@@ -1296,7 +1296,11 @@ if not DEGRADED_MODE:
 **5c. Recompute precision_at_3:**
 
 ```
-new_precision_at_3 = mean(q["precision"] for q in baseline["queries"] if q.get("precision") is not None)
+if DEGRADED_MODE:
+    new_precision_at_3 = None
+else:
+    values = [q["precision"] for q in baseline["queries"] if q.get("precision") is not None]
+    new_precision_at_3 = mean(values) if values else 0.0  # fallback for empty
 ```
 
 **5d. Assemble new Flow Score:**
@@ -1807,18 +1811,7 @@ project_root = "."
 rules_dir = os.path.join(project_root, ".claude", "rules")
 rules_path = os.path.join(rules_dir, "neuraltree.md")
 
-if not os.path.exists(rules_path):
-    os.makedirs(rules_dir, exist_ok=True)
-    write_file(rules_path, NEURALTREE_RULE_CONTENT)
-    emit("Phase 5/5: Installed .claude/rules/neuraltree.md")
-else:
-    emit("Phase 5/5: Organization rule already installed — skipping")
-```
-
-**Rule content (`NEURALTREE_RULE_CONTENT`):**
-
-```markdown
-# NeuralTree Organization Rule
+NEURALTREE_RULE_CONTENT = """# NeuralTree Organization Rule
 
 > Installed by /neuraltree. Enforces information flow standards in every session.
 
@@ -1842,6 +1835,14 @@ else:
 - [ ] Archive completed phases from `active/` to `archive/`
 - [ ] Delete `__pycache__/`, stale logs, orphaned temp files
 - [ ] Check `_INDEX.md` files match actual directory contents
+"""
+
+if not os.path.exists(rules_path):
+    os.makedirs(rules_dir, exist_ok=True)
+    write_file(rules_path, NEURALTREE_RULE_CONTENT)
+    emit("Phase 5/5: Installed .claude/rules/neuraltree.md")
+else:
+    emit("Phase 5/5: Organization rule already installed — skipping")
 ```
 
 ### Step 4: Cleanup
@@ -2033,6 +2034,7 @@ If `pending_actions` is non-empty, the report ends with an interactive prompt:
 ```
 if pending_actions:
     emit(f"\nWhich actions? (all / none / pick by number, e.g. '1,3')")
+    user_response = wait_for_user_input()
 ```
 
 **Processing the response:**
