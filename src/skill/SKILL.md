@@ -1327,3 +1327,566 @@ if DEGRADED_MODE:
 ```
 
 **Proceed to Section 7 (Enforce) with the `autoloop_state` and updated metrics.**
+
+---
+
+## Section 7: Enforce
+
+> The autoloop converged. Now lock in the gains — graduate learnings, re-index the world, install guardrails, and clean up.
+
+Enforcement happens after the AutoLoop exits (or after Diagnose, if all queries passed). This section ensures that every improvement persists across sessions, Viking stays current, and the project inherits organizational rules that maintain tree health going forward.
+
+### Step 1: Graduation Protocol
+
+The autoloop produced data. Graduation converts that data into durable project knowledge.
+
+**1a. Calibration — already done.**
+
+`neuraltree_update_calibration()` was called after every AutoLoop iteration (Section 6, Step 7). No additional calibration work is needed here. The calibration file at `.neuraltree/calibration.json` reflects the cumulative prediction accuracy from this run.
+
+**1b. Evolve queries.**
+
+The benchmark queries (Section 4) have earned status updates based on their performance in this run. Queries that consistently pass are wasting benchmark time. Queries that caught real issues are the canaries worth keeping.
+
+```
+evolved_queries = []
+
+for query in baseline["queries"]:
+    query_status = query.get("status", "active")
+
+    # Queries that passed in ALL iterations → demote to spot-check
+    # These queries found no failures — they're healthy canaries
+    if query.get("precision", 0) >= 0.67 and query_status != "critical":
+        query["status"] = "spot-check"
+
+    # Queries that caught real issues → promote to critical
+    # These queries found failures that led to KEEP or HOLD decisions
+    matching_kept = any(
+        k["target"] in query.get("source", "")
+        for k in autoloop_state["kept"]
+    )
+    matching_held = any(
+        h.get("target", h.get("query", "")) in query.get("source", "")
+        for h in autoloop_state["held"]
+    )
+    if matching_kept or matching_held:
+        query["status"] = "critical"
+
+    evolved_queries.append({
+        "text": query["text"],
+        "source": query.get("source", ""),
+        "status": query["status"],
+        "last_precision": query.get("precision"),
+        "last_run": now_iso8601()
+    })
+```
+
+**1c. Generate fresh queries from recent git activity.**
+
+New files and recently modified areas may not have queries covering them yet. Generate fresh queries to fill the gap:
+
+```
+# Get files modified since last run (or last 7 days if first run)
+recent_files = git_log_modified_files(since=state.get("last_run", "7 days ago"))
+
+# Filter to knowledge files (memory/, docs/, CLAUDE.md, etc.)
+knowledge_files = [f for f in recent_files if is_knowledge_file(f)]
+
+if knowledge_files:
+    fresh_result = neuraltree_generate_queries(
+        claude_md_path="CLAUDE.md",
+        memory_md_path="memory/MEMORY.md",
+        index_paths=[f for f in knowledge_files if f.endswith("_INDEX.md")],
+        git_log_lines=50,
+        indexed_doc_count=len(knowledge_files)
+    )
+
+    for q in fresh_result["queries"]:
+        # Only add if not already covered by an existing query
+        if not any(eq["text"] == q["text"] for eq in evolved_queries):
+            evolved_queries.append({
+                "text": q["text"],
+                "source": q.get("source", ""),
+                "status": "active",
+                "last_precision": None,
+                "last_run": None
+            })
+```
+
+**1d. Compress to history.**
+
+Write a single-line summary of this run to the history directory. This creates a time series of tree health that compounds across sessions.
+
+```json
+// .neuraltree/history/YYYY-MM-DD.json
+{
+    "date": "2026-04-05",
+    "flow_score_before": 0.58,
+    "flow_score_after": 0.91,
+    "delta": 0.33,
+    "iterations": 4,
+    "kept": 3,
+    "discarded": 0,
+    "held": 1,
+    "fixes": ["wire: 2", "index: 1"],
+    "exit_reason": "healthy",
+    "calibration_accuracy": 0.87,
+    "duration_seconds": 480
+}
+```
+
+```
+import json, os
+from datetime import datetime
+
+history_dir = os.path.join(".neuraltree", "history")
+os.makedirs(history_dir, exist_ok=True)
+
+history_entry = {
+    "date": datetime.now().strftime("%Y-%m-%d"),
+    "flow_score_before": autoloop_state["score_history"][0],
+    "flow_score_after": autoloop_state["score_history"][-1],
+    "delta": autoloop_state["score_history"][-1] - autoloop_state["score_history"][0],
+    "iterations": autoloop_state["iteration"],
+    "kept": len(autoloop_state["kept"]),
+    "discarded": len(autoloop_state["discarded"]),
+    "held": len(autoloop_state["held"]),
+    "fixes": summarize_fixes(autoloop_state["kept"]),  # e.g. ["wire: 2", "index: 1"]
+    "exit_reason": exit_reason,
+    "calibration_accuracy": read_calibration_accuracy(".neuraltree/calibration.json"),
+    "duration_seconds": int(elapsed_time.total_seconds())
+}
+
+history_path = os.path.join(history_dir, f"{history_entry['date']}.json")
+with open(history_path, "w") as f:
+    json.dump(history_entry, f, indent=2)
+```
+
+If a history file already exists for today (multiple runs in one day), append a numeric suffix: `2026-04-05_2.json`, `2026-04-05_3.json`, etc.
+
+**1e. Update state.json.**
+
+This is the persistent state that the Skill reads on next activation (Section 1, Step 2). It determines the mode for the next run.
+
+```json
+// .neuraltree/state.json
+{
+    "flow_score": 0.91,
+    "last_run": "2026-04-05T14:30:00Z",
+    "mode": "bootstrap",
+    "run_count": 1,
+    "calibration_accuracy": 0.87
+}
+```
+
+```
+state = {
+    "flow_score": current_flow_score,
+    "last_run": now_iso8601(),
+    "mode": mode,
+    "run_count": (previous_state.get("run_count", 0) + 1),
+    "calibration_accuracy": read_calibration_accuracy(".neuraltree/calibration.json")
+}
+
+with open(".neuraltree/state.json", "w") as f:
+    json.dump(state, f, indent=2)
+```
+
+**1f. Save evolved queries.**
+
+Write the evolved query set to disk. Future spot-check runs will filter to `status: "critical"` only, and future full runs will skip `status: "spot-check"` queries unless they fail again.
+
+```
+with open(".neuraltree/queries.json", "w") as f:
+    json.dump(evolved_queries, f, indent=2)
+```
+
+**1g. Delete .tmp/ entirely.**
+
+The `.neuraltree/.tmp/` directory holds backup files created during the AutoLoop. Now that all decisions are finalized (KEEP = committed, DISCARD = restored), the backups serve no purpose.
+
+```
+import shutil
+tmp_dir = os.path.join(".neuraltree", ".tmp")
+if os.path.exists(tmp_dir):
+    shutil.rmtree(tmp_dir)
+```
+
+### Step 2: Re-index Viking
+
+Every file that was modified, created, or wired during the AutoLoop needs to be re-indexed in Viking. Without re-indexing, Viking's search results will be stale — the next benchmark would penalize files that are actually fixed.
+
+```
+modified_files = set()
+
+# Files modified by KEEP actions
+for k in autoloop_state["kept"]:
+    modified_files.add(k["target"])
+
+# Files created by FOCUS_GAP splits (new leaves)
+for k in autoloop_state["kept"]:
+    if k["gap_type"] == "FOCUS_GAP":
+        # The split created new files — they need indexing too
+        modified_files.update(k.get("new_files", []))
+
+# Files wired (## Related links added)
+for k in autoloop_state["kept"]:
+    if k["gap_type"] == "SYNAPSE_GAP":
+        # Wire adds ## Related to the target AND its newly-linked neighbors
+        modified_files.update(k.get("linked_files", []))
+
+emit(f"Phase 5/5: Re-indexing {len(modified_files)} files in Viking...")
+
+for file_path in modified_files:
+    if os.path.exists(file_path):
+        viking_add_resource(uri=file_path, content=read_file(file_path))
+```
+
+**If `DEGRADED_MODE` is true:** Skip this step entirely. Viking is unavailable — re-indexing is impossible. Emit:
+
+```
+if DEGRADED_MODE:
+    emit("Phase 5/5: Skipping Viking re-index (DEGRADED mode)")
+```
+
+### Step 3: Install Organization Rule
+
+Create a `.claude/rules/neuraltree.md` file in the target project. This rule ensures that the project's organizational standards are enforced in every Claude Code session — not just during NeuralTree runs.
+
+**Only install on first run** (`state["run_count"] == 1`) or if the file doesn't exist. Don't overwrite on subsequent runs — the user may have customized it.
+
+```
+rules_dir = os.path.join(project_root, ".claude", "rules")
+rules_path = os.path.join(rules_dir, "neuraltree.md")
+
+if not os.path.exists(rules_path):
+    os.makedirs(rules_dir, exist_ok=True)
+    write_file(rules_path, NEURALTREE_RULE_CONTENT)
+    emit("Phase 5/5: Installed .claude/rules/neuraltree.md")
+else:
+    emit("Phase 5/5: Organization rule already installed — skipping")
+```
+
+**Rule content (`NEURALTREE_RULE_CONTENT`):**
+
+```markdown
+# NeuralTree Organization Rule
+
+> Installed by /neuraltree. Enforces information flow standards in every session.
+
+## Session Start Protocol
+
+1. Read `_INDEX.md` files in `memory/` and `docs/` before navigating
+2. Check trunk files (MEMORY.md, CLAUDE.md) — if approaching 100 lines, alert user
+3. Use Viking semantic search before grepping for project knowledge
+
+## File Standards (Memory & Docs)
+
+- **Size:** 20-80 lines per leaf file. Trunks (_INDEX.md, MEMORY.md) under 100 lines.
+- **Frontmatter:** Every leaf file must have `name`, `description`, `type`, `last_verified`
+- **## Related:** Every leaf must link to 1-5 related files (synapses)
+- **## Docs:** Reference project files where applicable
+
+## Weekly Hygiene Checklist
+
+- [ ] Run `/neuraltree` (or spot-check if recent)
+- [ ] Verify MEMORY.md < 100 lines
+- [ ] Archive completed phases from `active/` to `archive/`
+- [ ] Delete `__pycache__/`, stale logs, orphaned temp files
+- [ ] Check `_INDEX.md` files match actual directory contents
+```
+
+### Step 4: Cleanup
+
+Final housekeeping. Remove transient artifacts, verify persistent state, and release the lock.
+
+```
+# 1. Remove .lock file (allows next run)
+lock_path = os.path.join(".neuraltree", ".lock")
+if os.path.exists(lock_path):
+    os.remove(lock_path)
+
+# 2. Remove .tmp/ (should already be gone from Step 1g, but defensive)
+tmp_dir = os.path.join(".neuraltree", ".tmp")
+if os.path.exists(tmp_dir):
+    shutil.rmtree(tmp_dir)
+
+# 3. Verify state.json was written
+assert os.path.exists(".neuraltree/state.json"), "CRITICAL: state.json not written!"
+
+# 4. Verify history was written
+today = datetime.now().strftime("%Y-%m-%d")
+history_path = os.path.join(".neuraltree", "history", f"{today}.json")
+assert os.path.exists(history_path), f"CRITICAL: history/{today}.json not written!"
+
+emit("Phase 5/5: Cleanup complete. Lock released.")
+```
+
+**Proceed to Section 8 (Execution Report) with all data assembled.**
+
+---
+
+## Section 8: Execution Report
+
+> The final output. One glance tells the user everything: what improved, what's pending, and when to run again.
+
+Every NeuralTree run ends with a structured report. The report format varies based on the run type — full runs get the complete table, spot-checks get a one-liner.
+
+### Full Report Format
+
+Emit this report after every `bootstrap`, `critical`, `maintenance`, or `health-check` run:
+
+```
+═══════════════════════════════════════════════════
+  NeuralTree Report — {project_name}
+  Mode: {mode} | Duration: {duration}
+═══════════════════════════════════════════════════
+
+Flow Score: {before} → {after} ({delta:+.2f})
+
+┌──────────────────────────────────────────────────┐
+│ Metric              Before   After    Delta      │
+│ Hop Efficiency       0.45    0.88    +0.43       │
+│ Precision@3          0.33    0.87    +0.54       │
+│ Synapse Coverage     0.61    0.97    +0.36       │
+│ Dead Neuron Ratio    0.70    1.00    +0.30       │
+│ Freshness            0.80    0.95    +0.15       │
+│ Trunk Pressure       0.80    1.00    +0.20       │
+└──────────────────────────────────────────────────┘
+```
+
+**Metric table assembly:**
+
+```
+before_metrics = baseline["structural"]
+before_metrics["precision_at_3"] = baseline.get("precision_at_3", "N/A")
+
+after_metrics = {
+    "hop_efficiency": latest_metrics["hop_efficiency"],
+    "precision_at_3": latest_metrics.get("precision_at_3", "N/A"),
+    "synapse_coverage": latest_metrics["synapse_coverage"],
+    "dead_neuron_ratio": latest_metrics["dead_neuron_ratio"],
+    "freshness": latest_metrics["freshness"],
+    "trunk_pressure": latest_metrics["trunk_pressure"]
+}
+
+METRIC_LABELS = [
+    ("hop_efficiency",    "Hop Efficiency"),
+    ("precision_at_3",    "Precision@3"),
+    ("synapse_coverage",  "Synapse Coverage"),
+    ("dead_neuron_ratio", "Dead Neuron Ratio"),
+    ("freshness",         "Freshness"),
+    ("trunk_pressure",    "Trunk Pressure"),
+]
+
+for key, label in METRIC_LABELS:
+    bv = before_metrics.get(key, "N/A")
+    av = after_metrics.get(key, "N/A")
+    if isinstance(bv, (int, float)) and isinstance(av, (int, float)):
+        delta = av - bv
+        emit(f"│ {label:<20} {bv:>6.2f}   {av:>6.2f}   {delta:>+6.2f}       │")
+    else:
+        emit(f"│ {label:<20} {'N/A':>6}   {'N/A':>6}   {'N/A':>6}       │")
+```
+
+### Action Sections
+
+After the metric table, list all actions grouped by category:
+
+**SAFE ACTIONS (executed — non-destructive):**
+
+These are changes the autoloop already applied. They don't need approval because they're non-destructive (wiring links, updating freshness, re-indexing).
+
+```
+if autoloop_state["kept"]:
+    emit("\nSAFE ACTIONS (executed — non-destructive):")
+    for k in autoloop_state["kept"]:
+        action_desc = describe_action(k)  # e.g. "added ## Related (3 synapses)"
+        emit(f"  ✓ {k['target']} — {action_desc}")
+```
+
+**PENDING ACTIONS (require approval — destructive):**
+
+These are changes the autoloop identified but did NOT execute because they're destructive (deletes, moves, archives). They're gathered from CONTENT_GAP items and any FOCUS_GAP splits that would delete the original file.
+
+```
+pending_actions = []
+
+# CONTENT_GAP items need user-provided content
+for h in autoloop_state["held"]:
+    if h["gap_type"] == "CONTENT_GAP":
+        pending_actions.append({
+            "type": "CREATE",
+            "target": h.get("suggested_path", "TBD"),
+            "reason": h.get("query", "missing content"),
+            "trace": "N/A"
+        })
+
+# Any files recommended for deletion by diagnose (0 incoming refs, stale)
+for d in diagnosis.get("diagnoses", []):
+    if d.get("recommended_action") == "delete":
+        pending_actions.append({
+            "type": "DELETE",
+            "target": d.get("target_file", "unknown"),
+            "reason": d.get("reason", "no incoming references"),
+            "trace": f"{d.get('incoming_refs', 0)} refs"
+        })
+
+    if d.get("recommended_action") == "archive":
+        pending_actions.append({
+            "type": "ARCHIVE",
+            "target": d.get("target_file", "unknown"),
+            "destination": f"archive/{os.path.basename(d.get('target_file', 'unknown'))}",
+            "reason": d.get("reason", "stale content"),
+            "trace": f"{d.get('incoming_refs', 0)} refs"
+        })
+
+if pending_actions:
+    emit("\nPENDING ACTIONS (require approval — destructive):")
+    for i, pa in enumerate(pending_actions, 1):
+        if pa["type"] == "DELETE":
+            emit(f"  {i}. ⚠ DELETE {pa['target']} — {pa['reason']} (trace: {pa['trace']})")
+        elif pa["type"] == "ARCHIVE":
+            emit(f"  {i}. ⚠ ARCHIVE {pa['target']} → {pa['destination']} — {pa['reason']}")
+        elif pa["type"] == "CREATE":
+            emit(f"  {i}. ⚠ CREATE {pa['target']} — {pa['reason']}")
+```
+
+**NEEDS REVIEW (HOLD items):**
+
+```
+hold_items = [h for h in autoloop_state["held"] if h["gap_type"] != "CONTENT_GAP"]
+
+if hold_items:
+    emit("\nNEEDS REVIEW (HOLD items):")
+    for h in hold_items:
+        target = h.get("target", h.get("query", "unknown"))
+        emit(f"  ? {target} — {h.get('reason', 'review recommended')}")
+```
+
+**KEPT (verified alive):**
+
+```
+if autoloop_state["kept"]:
+    emit("\nKEPT (verified alive):")
+    for k in autoloop_state["kept"]:
+        emit(f"  ✓ {k['target']} — {k['gap_type']} fixed, delta {k['actual_delta']:+.3f}")
+```
+
+### Footer
+
+```
+emit(f"\nAutoLoop: {autoloop_state['iteration']} iterations, "
+     f"{len(autoloop_state['kept'])} KEEP / "
+     f"{len(autoloop_state['discarded'])} DISCARD / "
+     f"{len(autoloop_state['held'])} HOLD")
+
+calibration_acc = read_calibration_accuracy(".neuraltree/calibration.json")
+emit(f"Calibration accuracy: {calibration_acc:.0%}")
+emit(f"Exit reason: {exit_reason}")
+
+# Calculate next run ETA based on current score
+if current_flow_score >= 0.90:
+    next_eta = "7 days (weekly spot-check)"
+elif current_flow_score >= 0.75:
+    next_eta = "3 days (health-check)"
+else:
+    next_eta = "1 day (maintenance)"
+
+emit(f"Next run ETA: {next_eta}")
+```
+
+### Handling User Response to Pending Actions
+
+If `pending_actions` is non-empty, the report ends with an interactive prompt:
+
+```
+if pending_actions:
+    emit(f"\nWhich actions? (all / none / pick by number, e.g. '1,3')")
+```
+
+**Processing the response:**
+
+**"all"** — Execute all pending actions, re-score, and emit a final update:
+
+```
+if user_response == "all":
+    for pa in pending_actions:
+        execute_pending_action(pa, project_root=".")
+
+    # Re-score after executing pending actions
+    new_score = neuraltree_score(project_root=".")
+    new_flow_score = new_score["flow_score_partial"] + (precision_at_3 * 0.25)
+
+    emit(f"\nPending actions executed. Flow Score: {current_flow_score:.2f} → {new_flow_score:.2f}")
+
+    # Update state.json and history with final score
+    update_state_and_history(new_flow_score)
+```
+
+**Specific picks** (e.g. "1,3") — Execute only the selected actions:
+
+```
+elif "," in user_response or user_response.isdigit():
+    picks = [int(x.strip()) for x in user_response.split(",")]
+    for pick in picks:
+        if 1 <= pick <= len(pending_actions):
+            execute_pending_action(pending_actions[pick - 1], project_root=".")
+
+    # Re-score and update
+    new_score = neuraltree_score(project_root=".")
+    new_flow_score = new_score["flow_score_partial"] + (precision_at_3 * 0.25)
+    emit(f"\nSelected actions executed. Flow Score: {current_flow_score:.2f} → {new_flow_score:.2f}")
+    update_state_and_history(new_flow_score)
+```
+
+**"none"** — No actions executed. Pending actions are saved for the next run:
+
+```
+elif user_response == "none":
+    emit("\nNo actions executed. Pending items saved for next run.")
+    # Pending actions are implicitly available via diagnose in the next run
+```
+
+### Spot-Check Short Form
+
+When the run mode is `spot-check` and the score is healthy (Section 4, Step 7 exits early), emit this compact format instead of the full report:
+
+```
+NeuralTree spot-check — {project_name}
+Score: {score} ({status}) | {query_count} queries | 0 failures
+Last full run: {days} days ago | Next: {date}
+```
+
+```
+if mode == "spot-check" and current_flow_score > 0.90:
+    days_since = (now() - parse_iso(state["last_run"])).days
+    next_date = (now() + timedelta(days=7)).strftime("%Y-%m-%d")
+
+    emit(f"NeuralTree spot-check — {project_name}")
+    emit(f"Score: {current_flow_score:.2f} (Excellent) | {len(queries)} queries | 0 failures")
+    emit(f"Last full run: {days_since} days ago | Next: {next_date}")
+```
+
+### Degraded Mode Report
+
+When operating in degraded mode, the report includes additional context:
+
+- **Precision@3 row shows "N/A"** instead of numbers
+- **A warning banner appears** above the metric table:
+
+```
+if DEGRADED_MODE:
+    emit("⚠ DEGRADED MODE — Viking unavailable. Semantic metrics disabled. Score capped at 0.75.")
+```
+
+- **The footer includes a recommendation:**
+
+```
+if DEGRADED_MODE:
+    emit("Recommendation: Start Viking and re-run for full assessment.")
+```
+
+### Report Complete
+
+After the report is emitted and any user response to pending actions is processed, the NeuralTree run is complete. The lock has been released (Section 7, Step 4), state is persisted, and the project is ready for the next session.
