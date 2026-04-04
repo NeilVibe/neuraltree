@@ -375,3 +375,69 @@ APPROVE?  [yes / no / show-trace]
 ```
 
 The `[show-trace]` option lets the user see the full trace output before deciding.
+
+---
+
+## Section 3: Progress Protocol
+
+> The user should never wonder "is it stuck?"
+
+Every long-running operation must emit status messages so the user (and any observing agents) can track progress in real time. Silence breeds uncertainty — and uncertainty breeds cancellation.
+
+### Status Messages
+
+Emit a status message after each major step. The format is: `Phase {n}/{total}: {action}... {metric}`.
+
+```
+Phase 1/5: Scanning project... {total_count} files found
+Phase 1/5: Generating test queries... {query_count} queries from {source_count} sources
+Phase 2/5: Benchmarking... {completed}/{total} queries scored
+Phase 2/5: Baseline Flow Score: {score} ({status})
+Phase 3/5: Diagnosing... {failure_count} failures classified
+Phase 4/5: AutoLoop iteration {n}/10... Flow Score {before} → {after}
+Phase 4/5: AutoLoop converged — {kept} KEEP, {discarded} DISCARD, {held} HOLD
+Phase 5/5: Enforcing rules, re-indexing Viking...
+Complete: Flow Score {before} → {after} ({delta:+.2f})
+```
+
+**Rules:**
+- **Every phase boundary gets a message.** No silent transitions.
+- **Include counts and metrics.** "Scanning..." is bad. "Scanning... 847 files found" is good.
+- **Show before/after on changes.** Flow Score deltas, iteration counts, kept/discarded tallies.
+- **Use the `{status}` tag** to classify scores: `CRITICAL` (< 0.60), `DEGRADED` (0.60–0.79), `HEALTHY` (0.80–0.89), `EXCELLENT` (≥ 0.90).
+- **Shorter modes emit fewer messages.** A `spot-check` emits 2-3 messages. A `bootstrap` emits all of them.
+
+### Time Estimates
+
+Before starting the pipeline, tell the user how long to expect based on the detected mode:
+
+| Mode | Expected Duration |
+|------|------------------|
+| spot-check | ~30 seconds |
+| health-check | ~1-3 minutes |
+| maintenance | ~3-5 minutes |
+| bootstrap/critical | ~8-15 minutes |
+
+Emit the estimate in the activation status block (Section 1, Step 5):
+
+```
+║  ETA:         ~{duration}                     ║
+```
+
+If a phase takes significantly longer than expected (>2x the estimate), emit a warning:
+
+```
+WARNING: Phase 2/5 is taking longer than expected ({elapsed}s vs ~{expected}s estimate). Large project or slow Viking responses may be the cause.
+```
+
+### Subcommand Messages
+
+Subcommands that skip phases should still indicate what was skipped:
+
+```
+/neuraltree audit — skipping AutoLoop and Enforce (read-only mode)
+/neuraltree fix — skipping Benchmark (using last score: {score})
+/neuraltree enforce — skipping Benchmark, Diagnose, and AutoLoop (enforce-only mode)
+```
+
+This ensures the user understands why the run is shorter than usual.
