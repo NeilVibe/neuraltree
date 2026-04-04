@@ -41,6 +41,7 @@ These are operations the agent performs directly (not MCP tools). When executing
 | `describe_action(kept_entry)` | Generate a human-readable description of a kept action, e.g. "added ## Related (3 synapses)" or "re-indexed in Viking". |
 | `wait_for_user_input()` | Pause execution and return control to the user. Wait for their response. Return the response as a string. |
 | `release_lock()` | Delete `.neuraltree/.lock`. If it doesn't exist, silently succeed (already released). |
+| `timedelta(days=N)` | A time duration of N days. Use for date arithmetic (e.g., `now() - timedelta(days=7)`). |
 
 > **Note:** Code blocks in this skill use Python-like pseudocode for clarity. Functions like `os.path.exists()`, `json.load()`, `shutil.rmtree()` indicate the operation to perform, not literal Python imports. Use your platform's equivalent file operations.
 
@@ -213,12 +214,12 @@ with open(queries_path) as f:
 baseline = {
     "flow_score": state["flow_score"],
     "metrics": {
-        "hop_efficiency": state.get("hop_efficiency", 0.0),
-        "synapse_coverage": state.get("synapse_coverage", 0.0),
-        "dead_neuron_ratio": state.get("dead_neuron_ratio", 0.0),
-        "freshness": state.get("freshness", 0.0),
-        "trunk_pressure": state.get("trunk_pressure", 0.0),
-        "precision_at_3": state.get("precision_at_3")
+        "hop_efficiency": state.get("metrics", {}).get("hop_efficiency", 0.0),
+        "synapse_coverage": state.get("metrics", {}).get("synapse_coverage", 0.0),
+        "dead_neuron_ratio": state.get("metrics", {}).get("dead_neuron_ratio", 0.0),
+        "freshness": state.get("metrics", {}).get("freshness", 0.0),
+        "trunk_pressure": state.get("metrics", {}).get("trunk_pressure", 0.0),
+        "precision_at_3": state.get("metrics", {}).get("precision_at_3")
     },
     "queries": loaded_queries
 }
@@ -584,10 +585,14 @@ Emit: `Phase 2/5: Generating test queries... {result["total"]} queries from {res
 
 ```
 if mode == "spot-check":
-    import json
-    with open(".neuraltree/queries.json") as f:
-        cached = json.load(f)
-    queries = [q for q in cached if q.get("status") == "critical"]
+    if os.path.exists(".neuraltree/queries.json"):
+        import json
+        with open(".neuraltree/queries.json") as f:
+            cached = json.load(f)
+        queries = [q for q in cached if q.get("status") == "critical"]
+    else:
+        # Fall through to full query generation
+        emit("queries.json not found — running full benchmark instead of spot-check")
 ```
 
 ### Step 2: Viking Search (Precision@3)
@@ -745,7 +750,7 @@ The Flow Score determines what happens next. Higher scores mean less interventio
 ```
 if mode == "spot-check" and final_flow_score > 0.90:
     # Emit spot-check short form report (Section 8)
-    days_since = (now() - parse_iso(state["last_run"])).days
+    days_since = (now() - parse_iso(state.get("last_run", now_iso8601()))).days
     next_date = (now() + timedelta(days=7)).strftime("%Y-%m-%d")
     emit(f"NeuralTree spot-check — {project_name}")
     emit(f"Score: {final_flow_score:.2f} (Excellent) | {len(queries)} queries | 0 failures")
@@ -1159,11 +1164,21 @@ if predicted_delta < 0.001:
 
 Before touching any file, create a restorable backup. This is the safety net that makes DISCARD possible.
 
+**Skip backup for gap types that don't modify files in this step.** CONTENT_GAP and FOCUS_GAP both `continue` before any file is written (Step 4), so backing up `None` or a placeholder path would crash. Guard before calling:
+
 ```
-backup_result = neuraltree_backup(
-    files=[failure["target_file"]],
-    project_root="."
-)
+# CONTENT_GAP and FOCUS_GAP skip Step 4 via continue — no file is modified, no backup needed
+if failure["gap_type"] in ("CONTENT_GAP", "FOCUS_GAP"):
+    # Will be routed to HOLD in Step 4 without touching any file — skip backup
+    pass
+elif failure.get("target_file") is None:
+    # No target file resolved (e.g. CONTENT_GAP with no matching_files) — skip
+    pass
+else:
+    backup_result = neuraltree_backup(
+        files=[failure["target_file"]],
+        project_root="."
+    )
 ```
 
 **Important:** The backup captures the exact file state before the fix. If the fix makes things worse, Step 6 can restore to this exact state. Without backup, DISCARD would be impossible and every change would be permanent.
@@ -1700,7 +1715,15 @@ state = {
     "last_run": now_iso8601(),
     "mode": mode,
     "run_count": (previous_state.get("run_count", 0) + 1),
-    "calibration_accuracy": read_calibration_accuracy(".neuraltree/calibration.json")
+    "calibration_accuracy": read_calibration_accuracy(".neuraltree/calibration.json"),
+    "metrics": {
+        "hop_efficiency": latest_metrics.get("hop_efficiency", 0.0),
+        "synapse_coverage": latest_metrics.get("synapse_coverage", 0.0),
+        "dead_neuron_ratio": latest_metrics.get("dead_neuron_ratio", 0.0),
+        "freshness": latest_metrics.get("freshness", 0.0),
+        "trunk_pressure": latest_metrics.get("trunk_pressure", 0.0),
+        "precision_at_3": latest_metrics.get("precision_at_3")
+    }
 }
 
 with open(".neuraltree/state.json", "w") as f:
@@ -1780,6 +1803,7 @@ Create a `.claude/rules/neuraltree.md` file in the target project. This rule ens
 **Only install on first run** (`state["run_count"] == 1`) or if the file doesn't exist. Don't overwrite on subsequent runs — the user may have customized it.
 
 ```
+project_root = "."
 rules_dir = os.path.join(project_root, ".claude", "rules")
 rules_path = os.path.join(rules_dir, "neuraltree.md")
 
@@ -1940,10 +1964,10 @@ These are changes the autoloop identified but did NOT execute because they're de
 # PENDING ACTIONS come from HOLD items that need user approval
 pending_actions = []
 for held in autoloop_state["held"]:
-    if held.get("reason", "").startswith("CONTENT_GAP"):
+    if held.get("gap_type") == "CONTENT_GAP":
         pending_actions.append({"type": "CREATE", "target": held.get("suggested_path", "unknown"), "reason": held["reason"]})
-    elif held.get("reason", "").startswith("FOCUS_GAP"):
-        pending_actions.append({"type": "SPLIT", "target": held["failure"]["target_file"], "reason": held["reason"]})
+    elif held.get("gap_type") == "FOCUS_GAP":
+        pending_actions.append({"type": "SPLIT", "target": held.get("target", "unknown"), "reason": held["reason"]})
 
 if pending_actions:
     emit("\nPENDING ACTIONS (require approval — destructive):")
@@ -1954,12 +1978,14 @@ if pending_actions:
             emit(f"  {i}. ⚠ ARCHIVE {pa['target']} → {pa['destination']} — {pa['reason']}")
         elif pa["type"] == "CREATE":
             emit(f"  {i}. ⚠ CREATE {pa['target']} — {pa['reason']}")
+        elif pa["type"] == "SPLIT":
+            emit(f"  {i}. ⚠ SPLIT {pa['target']} — {pa['reason']}")
 ```
 
 **NEEDS REVIEW (HOLD items):**
 
 ```
-hold_items = [h for h in autoloop_state["held"] if h["gap_type"] != "CONTENT_GAP"]
+hold_items = [h for h in autoloop_state["held"] if h.get("gap_type") not in ("CONTENT_GAP", "FOCUS_GAP")]
 
 if hold_items:
     emit("\nNEEDS REVIEW (HOLD items):")
@@ -2046,6 +2072,20 @@ def execute_pending_action(action, project_root):
         # Update any _INDEX.md that referenced the moved file
         emit(f"  Archived {action['target']} → archive/{os.path.basename(action['target'])}")
 
+    elif action["type"] == "SPLIT":
+        emit(f"FOCUS_GAP: {action['target']} is too large and should be split into focused leaves.")
+        emit(f"  1. Read the file and identify distinct topics/sections")
+        emit(f"  2. Create a new leaf file for each topic (20-80 lines each)")
+        emit(f"  3. Update _INDEX.md and ## Related links to point to the new leaves")
+        emit(f"  4. Re-index all new files in Viking")
+        emit(f"  Manual splitting recommended — type 'skip' to defer.")
+        user_content = wait_for_user_input()
+        if user_content.strip().lower() == "skip":
+            return  # Deferred to next run
+        # User confirmed — they will handle the split manually
+        emit(f"  Split of {action['target']} acknowledged. Verify results on next /neuraltree run.")
+        return
+
     elif action["type"] == "CREATE":
         emit(f"CONTENT_GAP: What content should go in {action['target']}? Provide it now or type 'skip'.")
         user_content = wait_for_user_input()
@@ -2123,8 +2163,10 @@ Last full run: {days} days ago | Next: {date}
 ```
 
 ```
+# Note: Spot-check report is emitted in Section 4 Step 7. This block handles
+# the case where spot-check was upgraded to maintenance mid-run.
 if mode == "spot-check" and current_flow_score > 0.90:
-    days_since = (now() - parse_iso(state["last_run"])).days
+    days_since = (now() - parse_iso(state.get("last_run", now_iso8601()))).days
     next_date = (now() + timedelta(days=7)).strftime("%Y-%m-%d")
 
     emit(f"NeuralTree spot-check — {project_name}")
@@ -2202,7 +2244,7 @@ When the project directory is not a git repository:
 
 - `neuraltree_backup()` uses file copy instead of git stash — this already works (the MCP tool detects git absence and falls back to directory copy).
 - `neuraltree_sandbox_create()` falls back to rsync instead of git worktree — this already works (same detection logic).
-- **Warn about harder reversibility:** `"No git detected. Backups use file copy — reverting changes requires manual restore from .neuraltree/backups/."` Git-based undo is instant; file-copy undo requires the user to confirm which backup to restore.
+- **Warn about harder reversibility:** `"No git detected. Backups use file copy — reverting changes requires manual restore from .neuraltree/.tmp/backup/."` Git-based undo is instant; file-copy undo requires the user to confirm which backup to restore.
 - All other operations proceed normally. Git is a convenience, not a requirement.
 
 ### Bootstrap: Empty Project
