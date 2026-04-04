@@ -72,7 +72,7 @@ tools:
 
 ### Step 2: Detect Mode
 
-Read `.neuraltree/state.json` from the project root. This file is Skill-owned — the MCP server does NOT create or manage it.
+Read `.neuraltree/state.json` from the project root. This file is Skill-owned — the MCP server does NOT create or manage it. This is **integration point #4** from the handoff.
 
 **If `.neuraltree/state.json` does not exist** — this is a first run. Mode = `bootstrap`.
 
@@ -2155,9 +2155,9 @@ When the project contains multiple CLAUDE.md files or multiple package.json file
 
 NeuralTree must never run twice on the same project simultaneously. File mutations from two concurrent runs would corrupt the project.
 
-- **Lock check at activation.** Before any work begins (Section 1, Step 3), check for `.neuraltree/.lock`. The lock file contains: the current ISO 8601 timestamp.
-- **Stale lock (>1 hour):** Auto-remove the lock with a warning: `"Stale lock found (started {timestamp}, PID {pid}). Removing and proceeding."` One hour is generous — no NeuralTree run should take that long.
-- **Active lock:** Abort immediately. `"NeuralTree is already running (PID {pid}, started {timestamp}). Aborting."` Do not attempt to queue or wait.
+- **Lock check at activation.** Before any work begins (Section 1, Step 3), check for `.neuraltree/.lock`. The lock file contains only an ISO 8601 timestamp string (e.g. `2026-04-05T14:30:00Z`). No PID, no other content.
+- **Stale lock (>1 hour):** Auto-remove the lock with a warning: `"Stale lock found (started {timestamp}). Removing and proceeding."` One hour is generous — no NeuralTree run should take that long.
+- **Active lock:** Abort immediately. `"NeuralTree is already running (started {timestamp}). Aborting."` Do not attempt to queue or wait.
 - **ALL code paths release lock.** Success, failure, crash, user cancellation — every exit path must release the lock. Use try/finally or equivalent. A leaked lock blocks all future runs until the 1-hour stale timeout.
 
 ### Scale Limits
