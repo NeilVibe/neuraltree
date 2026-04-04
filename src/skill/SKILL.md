@@ -151,3 +151,227 @@ Replace placeholders with actual values from Steps 1–4.
 ---
 
 *Section 2 (Artery Principle) follows. This section is the entry point — everything else flows from here.*
+
+---
+
+## Section 2: The Artery Principle
+
+> "It's NOT about disk space. It's about FLOW."
+
+Organization exists for one reason: so information reaches the brain at the moment it's needed. A perfectly organized project where nothing is findable is worse than a messy one with good search. NeuralTree optimizes for **retrieval speed**, not tidiness.
+
+### The Four Principles
+
+#### 1. Synapse Quality
+
+Every connection between files must lead somewhere **alive**. A `## Related` link to a deleted file is a dead synapse — it wastes a hop and erodes trust in the network. A link to a 500-line dump that buries the relevant paragraph is a **weak** synapse — technically alive, but the signal degrades in transit.
+
+**Test:** Follow every link. Does it land on exactly what you need, within 10 seconds of reading? If not, the synapse is weak.
+
+#### 2. Hop Synergy
+
+The tree has three layers: **trunk** (indexes, MEMORY.md, CLAUDE.md), **branch** (_INDEX.md files, category directories), and **leaf** (individual topic files, source code). Each hop down the tree must add specificity:
+
+- **Trunk** tells you WHERE to look (which branch)
+- **Branch** tells you WHAT exists (which leaves)
+- **Leaf** tells you THE THING (the actual knowledge)
+
+If a trunk file contains leaf-level detail, it's doing two jobs and doing both badly. If a leaf file contains trunk-level overviews, it should be promoted or split.
+
+**Test:** Read any trunk entry. Can you predict what the branch contains? Read any branch entry. Can you predict what the leaf says? If yes, hop synergy is working.
+
+#### 3. Electrical Flow
+
+The `## Related` section at the bottom of every neuron is the wiring. These synapses must fire toward the **right next neuron** — the one the reader most likely needs after absorbing this one.
+
+Bad wiring: linking to everything tangentially related (creates noise).
+Good wiring: linking to the 2-4 files that **complete the thought** or **answer the next question**.
+
+**Test:** After reading a leaf, do the `## Related` links answer "what would I look for next?" If they answer "what else exists in this project?" the wiring is wrong.
+
+#### 4. Trunk Pressure
+
+The trunk (MEMORY.md, CLAUDE.md, _INDEX.md files) is the heart of the system. It loads into context on every session start. Every line in the trunk competes for attention with every other line.
+
+**>100 lines in a trunk file = pressure drops.** The agent starts skimming. Critical entries get lost in the noise. Information that should be instant-access becomes buried.
+
+**Rule:** Trunk files are indexes, not content. They point to branches. They never explain — they direct.
+
+**Test:** Count the lines in MEMORY.md. If it exceeds 100, something that belongs in a branch has leaked into the trunk.
+
+---
+
+### The 0-1-2 Hop Rule
+
+Every piece of project knowledge must be reachable in **at most 2 tool calls** from a fresh session. This is the fundamental performance guarantee of a neural tree.
+
+#### HOP 0 — Always in Context
+
+These files load automatically at session start. Zero tool calls needed.
+
+- `MEMORY.md` — the trunk index
+- `CLAUDE.md` — project instructions and structure
+- `rules/` files — behavioral constraints
+- `.neuraltree/state.json` — last known health
+
+**If it's needed every session, it belongs at HOP 0.** If it's only needed sometimes, it does NOT belong here — trunk pressure.
+
+#### HOP 1 — One Tool Call
+
+One call to any of these retrieval methods reaches the branch layer:
+
+- Read an `_INDEX.md` file (pointed to by trunk)
+- `viking_search("query")` — semantic search across all indexed content
+- `neuraltree_scan()` — file inventory
+- `Grep` / `Glob` — pattern-based search
+
+**If it's needed frequently but not every session, it belongs at HOP 1.** The trunk must point to it clearly enough that the agent knows which call to make.
+
+#### HOP 2 — Two Tool Calls Maximum
+
+A second call reaches the leaf layer: individual topic files, source code, archived content.
+
+- HOP 1 (index or search) reveals the path → HOP 2 (read the file)
+- `viking_search()` → `viking_read(uri)` for full content
+- `neuraltree_trace(path)` → read the connected files
+
+**If it's reference material, historical, or deeply specific, it belongs at HOP 2.**
+
+#### NEVER HOP 3+
+
+If reaching a piece of information requires 3 or more tool calls, the neural tree is broken. Possible causes:
+
+- Missing index entry (trunk doesn't point to the right branch)
+- Missing `## Related` link (leaf doesn't wire to its neighbor)
+- Missing Viking embedding (content exists but isn't indexed)
+- File buried too deep in directory nesting
+
+**When `neuraltree_diagnose()` reports HOP 3+ paths, treat them as critical gaps.**
+
+---
+
+### Perfect Neuron Format
+
+Every leaf file in the neural tree must follow this template. The format is not decorative — each section serves the retrieval system.
+
+```markdown
+---
+name: [topic]
+description: [one-line summary — what Viking indexes, what _INDEX.md displays]
+type: [user | feedback | project | reference]
+last_verified: [YYYY-MM-DD — when a human or agent confirmed this is still accurate]
+---
+
+[Content — 20-80 lines, single topic only]
+
+## Related
+- [other_leaf.md](path) — why these fire together
+
+## Docs
+- `path/to/source.py` — what it implements
+```
+
+**Frontmatter** (required):
+- `name` — the topic, used for search and display
+- `description` — one line, appears in index listings and Viking search results
+- `type` — categorization for filtering (`user` = about the human, `feedback` = from reviews/retrospectives, `project` = about the codebase, `reference` = stable external knowledge)
+- `last_verified` — staleness detection. Files not verified in 90+ days get flagged by `neuraltree_diagnose()`
+
+**Content** (20-80 lines):
+- Single topic per file. If you need a heading to separate concerns, you need two files.
+- 20 lines minimum — below this, the neuron is too thin to justify its own file. Merge it into a related neuron.
+- 80 lines maximum — above this, the neuron is trying to cover too much. Split it.
+
+**## Related** (required):
+- 2-4 links to other neurons that complete the thought
+- Each link includes a reason ("why these fire together") — not just the filename
+- Dead links (pointing to deleted files) are scored as failures by `neuraltree_score()`
+
+**## Docs** (required):
+- Links to source code, config files, or external docs that this neuron describes
+- Keeps the neuron grounded in implementation — prevents drift between docs and reality
+
+---
+
+### Decision Rules
+
+These rules govern every action the skill takes. They are non-negotiable.
+
+#### 1. Cleanup Is a Side Effect, Not the Goal
+
+NeuralTree's purpose is to improve **information flow** — the speed and accuracy of finding what you need. Deleting files, renaming directories, and reorganizing structures are tools in service of that goal, not the goal itself.
+
+If the neural tree scores 0.95 but has a messy directory structure, **do not reorganize**. The flow is working. Reorganizing risks breaking links, invalidating caches, and confusing the user — all for cosmetic gain.
+
+**Principle:** Measure flow first. Only intervene where flow is broken.
+
+#### 2. Trace Before Prune
+
+**NEVER recommend deleting, moving, or archiving a file without calling `neuraltree_trace(path)` first.**
+
+`neuraltree_trace()` reveals:
+- What other files reference this one (incoming links)
+- What this file references (outgoing links)
+- Whether Viking has it indexed
+- Whether any _INDEX.md lists it
+
+A file with zero incoming links might be orphaned — or it might be the only copy of critical knowledge that nothing has linked to yet. Trace tells you which.
+
+**Rule:** If `neuraltree_trace()` shows ANY incoming references, the file is alive. Deletion requires either rewiring those references first or explicit user approval with full context.
+
+#### 3. Show Both Sides
+
+Every report the skill generates must show what was **KEPT** and what was **DELETED/CHANGED**, with proof for each decision.
+
+Bad report:
+```
+Deleted 12 stale files. Flow score improved 0.72 → 0.78.
+```
+
+Good report:
+```
+KEPT (8 files):
+  - memory/rules/build_rules.md — 3 incoming refs, verified 2 days ago
+  - memory/active/phase2.md — active phase, 5 incoming refs
+  ...
+
+DELETED (4 files, pending user approval):
+  - memory/old_notes.md — 0 incoming refs, last_verified 180 days ago, trace shows no connections
+  - docs/draft_v1.md — superseded by docs/draft_v2.md, 0 incoming refs since v2 published
+  ...
+
+Flow score: 0.72 → 0.78 (projected)
+```
+
+The user must be able to verify every decision from the report alone.
+
+#### 4. User Approves Destructive Actions
+
+Two categories of actions:
+
+**Auto-approved** (skill executes without asking):
+- Wiring `## Related` links between existing files
+- Adding files to Viking index
+- Updating `_INDEX.md` entries
+- Writing `.neuraltree/state.json`
+- Creating sandbox worktrees for testing changes
+
+**Requires user approval** (skill proposes, user confirms):
+- Deleting any file
+- Moving any file to a new location
+- Renaming any file
+- Archiving (moving to archive/)
+- Splitting a file into multiple files
+- Merging multiple files into one
+- Any change to CLAUDE.md or MEMORY.md content (not just links)
+
+**Presentation format for approval requests:**
+```
+PROPOSED: Delete memory/old_notes.md
+REASON:   0 incoming refs, not verified in 180 days, content duplicated in memory/rules/build_rules.md
+TRACE:    neuraltree_trace() shows no connections
+IMPACT:   Flow score unchanged (file was unreachable anyway)
+APPROVE?  [yes / no / show-trace]
+```
+
+The `[show-trace]` option lets the user see the full trace output before deciding.
