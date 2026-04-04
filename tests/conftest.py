@@ -108,6 +108,44 @@ def tmp_project(tmp_path):
     # empty dir (should be detected by scan)
     (p / "archive" / "old_code").mkdir(parents=True)
 
+    # memory/lessons/ — incident memory layer
+    lessons = mem / "lessons"
+    lessons.mkdir()
+    (lessons / "_INDEX.md").write_text(
+        "---\nname: Lessons Index\ntype: reference\nlast_verified: 2026-04-04\n---\n\n"
+        "- [Images](images.md) — image pipeline lessons\n"
+        "- [Database](database.md) — DB/PG lessons\n"
+    )
+    (lessons / "images.md").write_text(
+        "---\nname: Image Lessons\ndescription: Past image issues\n"
+        "type: reference\nlast_verified: 2026-04-04\n---\n\n"
+        "## DDS Images Not Showing (Phase 113)\n"
+        "- **Symptom:** Zero images in Codex on PEARL\n"
+        "- **Root cause:** pillow-dds not installed\n"
+        "- **Fix:** import pillow_dds in media_converter.py\n"
+        "- **Key file:** `server/tools/media_converter.py`\n"
+        "- **Lesson:** Always check if format handlers are installed\n\n"
+        "## Chrome Image Cache Bug (DOC-003)\n"
+        "- **Symptom:** Old images persist after update\n"
+        "- **Root cause:** Chrome caches 404 responses permanently\n"
+        "- **Fix:** Cache-bust with ?v=${Date.now()} on image URLs\n"
+        "- **Key file:** `locaNext/src/components/ImageViewer.svelte`\n"
+        "- **Lesson:** Chrome caches ERRORS too, not just successes\n\n"
+        "## Related\n- [database.md](database.md) — cross-domain\n\n"
+        "## Docs\n- `server/tools/media_converter.py` — DDS conversion\n"
+        "- `locaNext/src/components/ImageViewer.svelte` — image display\n"
+    )
+    # database.md — stale, unwired (no ## Related, no ## Docs)
+    (lessons / "database.md").write_text(
+        "---\nname: Database Lessons\ndescription: Past DB issues\n"
+        "type: reference\nlast_verified: 2025-06-01\n---\n\n"
+        "## PG Connection Refused\n"
+        "- **Symptom:** Cannot connect to PostgreSQL after router reboot\n"
+        "- **Root cause:** LAN IP changed, pg_hba.conf had old IP\n"
+        "- **Fix:** Update pg_hba.conf with new subnet range\n"
+        "- **Key file:** `config/pg_hba.conf`\n"
+    )
+
     return p
 
 
