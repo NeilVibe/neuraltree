@@ -1890,3 +1890,112 @@ if DEGRADED_MODE:
 ### Report Complete
 
 After the report is emitted and any user response to pending actions is processed, the NeuralTree run is complete. The lock has been released (Section 7, Step 4), state is persisted, and the project is ready for the next session.
+
+---
+
+## Section 9: Degraded Mode & Edge Cases
+
+> Things go wrong. The skill must handle every failure gracefully — never crash, never corrupt, never leave the project worse than it found it.
+
+This section defines how NeuralTree behaves when dependencies are missing, projects are unusual, or infrastructure fails. Every scenario here has been anticipated — there are no "undefined" states.
+
+### Without Viking (DEGRADED_MODE)
+
+When Viking MCP is unreachable (connection refused, timeout, not installed):
+
+1. **Warn immediately:** `"Viking not found. Operating in structure-only mode (4 of 6 metrics)."`
+2. **Skip:** Precision@3 evaluation, Viking re-indexing in post-loop enforcement
+3. **Merge structure_reachability:** `structure_reachability = (hop_efficiency + synapse_coverage) / 2` — the two structural sub-metrics absorb what Precision@3 would have measured
+4. **Reweight the remaining metrics:**
+
+| Metric | Normal Weight | Degraded Weight |
+|--------|--------------|-----------------|
+| structure_reachability | 0.25 | 0.45 |
+| query_resolution | 0.25 | 0.25 |
+| freshness | 0.15 | 0.20 |
+| lesson_coverage | 0.10 | 0.10 |
+| precision_at_3 | 0.25 | — (skipped) |
+
+5. **Reclassify EMBEDDING_GAP → SYNAPSE_GAP:** Without Viking, embedding gaps cannot be fixed by re-indexing. Reclassify them as SYNAPSE_GAP so the AutoLoop fixes them via wiring (adding `## Related` links, cross-references) instead of attempting Viking operations that will fail.
+
+**Score cap in degraded mode:** Flow Score is capped at 0.75. A project cannot be rated HEALTHY or EXCELLENT without semantic search validation.
+
+### Bootstrap: No CLAUDE.md
+
+When the target project has no CLAUDE.md (common for new or external projects):
+
+1. **Check README.md as initial trunk.** If a README.md exists, treat it as the provisional trunk node — extract structure, purpose, and navigation hints from it.
+2. **No README either:** Fall back to directory structure + filenames. Use `neuraltree_scan()` output to infer project shape. File names and directory names become the only source for `neuraltree_generate_queries()`.
+3. **Create minimal CLAUDE.md nav hub.** After the scan phase, generate a minimal CLAUDE.md that contains:
+   - Project name (from package.json, pyproject.toml, or directory name)
+   - Directory listing with one-line descriptions
+   - `## Key Files` section linking to the most-connected files
+4. **Proceed with full pipeline.** A low Flow Score is expected and normal — the AutoLoop will improve it. Do not skip phases or lower thresholds.
+
+### Bootstrap: No Git
+
+When the project directory is not a git repository:
+
+- `neuraltree_backup()` uses file copy instead of git stash — this already works (the MCP tool detects git absence and falls back to directory copy).
+- `neuraltree_sandbox_create()` falls back to rsync instead of git worktree — this already works (same detection logic).
+- **Warn about harder reversibility:** `"No git detected. Backups use file copy — reverting changes requires manual restore from .neuraltree/backups/."` Git-based undo is instant; file-copy undo requires the user to confirm which backup to restore.
+- All other operations proceed normally. Git is a convenience, not a requirement.
+
+### Bootstrap: Empty Project
+
+When the project has very few files (< 5 files, or only config files):
+
+- `neuraltree_scan()` returns minimal file list — this is expected.
+- `neuraltree_generate_queries()` generates queries from filenames only — fewer sources means fewer queries, which is correct.
+- Flow Score will be ~0.0 — this is expected and normal for an empty project.
+- The AutoLoop creates initial structure: CLAUDE.md, suggested directory layout, initial wiring. This is the bootstrap path — NeuralTree is creating the neural tree from scratch.
+- Do not treat a low score as a failure. Emit: `"Empty project detected. Creating initial structure..."`
+
+### Monorepo Detection
+
+When the project contains multiple CLAUDE.md files or multiple package.json files at different directory depths:
+
+- **Scope to cwd only.** NeuralTree operates on the current working directory, not the entire repository. If cwd is `/repo/packages/frontend`, only that subtree is scanned.
+- **Detect cross-boundary references:** If `neuraltree_wire()` or `neuraltree_trace()` reveals links pointing outside the cwd scope, flag them but do not follow them.
+- **Warn about cross-boundary wiring:** `"Monorepo detected. Scoping to {cwd}. Cross-boundary references found — wiring limited to current scope."`
+- Do not attempt to score or modify files outside cwd. Monorepo-wide organization requires running NeuralTree separately in each subproject.
+
+### Concurrent Run Protection
+
+NeuralTree must never run twice on the same project simultaneously. File mutations from two concurrent runs would corrupt the project.
+
+- **Lock check at activation.** Before any work begins (Section 1, Step 1), check for `.neuraltree/neuraltree.lock`. The lock file contains: PID, start timestamp, hostname.
+- **Stale lock (>1 hour):** Auto-remove the lock with a warning: `"Stale lock found (started {timestamp}, PID {pid}). Removing and proceeding."` One hour is generous — no NeuralTree run should take that long.
+- **Active lock:** Abort immediately. `"NeuralTree is already running (PID {pid}, started {timestamp}). Aborting."` Do not attempt to queue or wait.
+- **ALL code paths release lock.** Success, failure, crash, user cancellation — every exit path must release the lock. Use try/finally or equivalent. A leaked lock blocks all future runs until the 1-hour stale timeout.
+
+### Scale Limits
+
+NeuralTree is designed for typical projects (10–5,000 files). At extreme scale, operations are capped to prevent runaway resource consumption:
+
+| Parameter | Limit | Behavior At Limit |
+|-----------|-------|-------------------|
+| File scan | 10,000 files | `"Large project — sampling mode"` — randomly sample files, prioritize trunk/branch nodes |
+| Test queries | 50 max | Cap query generation regardless of project size |
+| AutoLoop iterations | 10 max | Hard stop, emit partial report with results so far |
+| Leaf file size | 500 lines | Flag as FOCUS_GAP — file should be split or promoted to branch |
+| Trunk (CLAUDE.md) size | 100 lines | Flag as TRUNK_PRESSURE — trunk is overloaded, needs delegation to branches |
+| Backup directory | 100 MB | Skip large files (binaries, data files) with warning: `"Skipping {file} ({size} MB) — exceeds backup limit"` |
+
+These limits are hard caps, not suggestions. Exceeding them degrades quality and wastes resources.
+
+### Error Recovery
+
+When infrastructure fails mid-run, NeuralTree must recover gracefully — never leave the project in a worse state than it started:
+
+| Error | Recovery |
+|-------|----------|
+| MCP crash mid-loop | Release lock, report partial results from completed iterations, suggest `"Restart NeuralTree to continue from iteration {n}"` |
+| Viking timeout | Retry once (5-second timeout). If retry fails, switch to DEGRADED_MODE for the remainder of the run. Do not retry again. |
+| File permission denied | Report warning: `"Permission denied: {path} — skipping"`. Continue with remaining files. Do not abort the entire run for one inaccessible file. |
+| Disk full during backup | Abort the backup phase. Release lock. Report: `"Disk full — backup aborted. Free space and retry."` Do not proceed without a backup. |
+| LLM judge returns garbage | Default to NO (conservative — do not apply the change). Log warning: `"LLM judge returned unparseable response — defaulting to HOLD"`. Continue with next iteration. |
+| State file corrupted | Re-initialize state from defaults. Warn: `"State file corrupted — resetting to defaults. Previous calibration data lost."` |
+| Network partition (Viking mid-query) | Treat as Viking timeout — retry once, then degrade. Do not hang waiting for reconnection. |
+
+**The cardinal rule of error recovery:** Never leave the lock held. Never leave the project modified without a backup. Never silently swallow an error — always warn the user.
