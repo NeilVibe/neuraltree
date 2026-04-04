@@ -1054,7 +1054,7 @@ For bootstrap and critical modes, the AutoLoop MUST run in a sandbox:
 2. Run the entire AutoLoop (Steps 1-9) on the sandbox copy
 3. After convergence: `neuraltree_sandbox_diff()` → review all changes
 4. Present diff to user for approval
-5. User approves → `neuraltree_sandbox_apply(actions=approved_changes)`
+5. User approves → `neuraltree_sandbox_apply(files=approved_changes)`
 6. `neuraltree_sandbox_destroy()` → cleanup
 
 For health-check and maintenance modes:
@@ -1088,7 +1088,19 @@ autoloop_state = {
 
 latest_metrics = dict(baseline["metrics"])  # copy baseline metrics as starting point
 current_flow_score = baseline["flow_score"]
+
+# Sandbox activation for high-risk modes
+if mode in ("bootstrap", "critical"):
+    sandbox = neuraltree_sandbox_create(project_root=".")
+    sandbox_root = sandbox["sandbox_path"]
+    emit f"Sandbox created at {sandbox_root} — all AutoLoop changes will be isolated"
+else:
+    sandbox_root = "."
+
+# Use sandbox_root as project_root for all MCP calls in this loop
 ```
+
+> **Note:** All `project_root="."` calls in Steps 2-9 below should use `project_root=sandbox_root` instead. This ensures bootstrap and critical mode changes are isolated in the sandbox, while other modes operate directly on the project.
 
 ### Per-Iteration Steps
 
@@ -1099,6 +1111,9 @@ For each failure in `priority_queue`, execute these 9 steps in order. Each step 
 Before attempting any fix, check whether this exact (gap_type, target) combination has already been tried. This prevents wasting iterations on the same failure when the fix didn't work or the failure is a duplicate.
 
 ```
+# Default — overwritten in Step 3
+backed_up_files = []
+
 dedup_key = (failure["gap_type"], failure.get("target_file", failure.get("query", "")))
 
 if dedup_key in autoloop_state["attempted"]:
@@ -1200,7 +1215,8 @@ if failure.get("target_file") is None:
     # No target file resolved — skip backup
     pass
 elif failure["gap_type"] == "SYNAPSE_GAP":
-    # Pre-compute wire targets to know which neighbors will be modified
+    # READ-ONLY preview — neuraltree_wire() returns suggestions without modifying any files
+    # We call it here to identify which neighbor files will be affected, so we can back them up
     wire_preview = neuraltree_wire(
         file_path=failure["target_file"],
         all_leaf_paths=scan_result["files"],
@@ -1556,6 +1572,23 @@ Emit once at loop start if degraded:
 ```
 if DEGRADED_MODE:
     emit("WARNING: AutoLoop running in DEGRADED mode — EMBEDDING_GAP fixes disabled, semantic scoring unavailable")
+```
+
+### Sandbox Finalization
+
+After the AutoLoop exits (bootstrap/critical modes only), the sandbox changes must be reviewed and applied:
+
+```
+# Sandbox finalization (bootstrap/critical modes only)
+if sandbox_root != ".":
+    diff = neuraltree_sandbox_diff(project_root=".")
+    # Present diff to user for approval
+    emit "Sandbox changes ready for review:"
+    emit diff summary
+    user_response = wait_for_user_input()  # "approve" / "reject"
+    if user_response approved:
+        neuraltree_sandbox_apply(files=[f["path"] for f in diff["modified"] + diff["added"]], project_root=".")
+    neuraltree_sandbox_destroy(project_root=".")
 ```
 
 **Proceed to Section 7 (Enforce) with the `autoloop_state` and updated metrics.**
