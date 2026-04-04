@@ -16,6 +16,32 @@ tools_required:
 
 ---
 
+## Helper Functions Reference
+
+These are operations the agent performs directly (not MCP tools). When executing the skill, use your native capabilities for these:
+
+| Function | What To Do |
+|----------|-----------|
+| `read_file(path)` | Read file contents. Use your file reading capability. |
+| `write_file(path, content)` | Write content to file. Use your file writing capability. |
+| `apply_suggested_content(file, content)` | Append `content` to end of `file` (the `## Related` + `## Docs` block from `neuraltree_wire`). If those sections already exist, replace them. |
+| `update_frontmatter(file, fields)` | Parse YAML frontmatter in `file`, update the given fields, write back. Preserve all other frontmatter fields unchanged. |
+| `viking_add_resource(uri, content)` | Call Viking MCP: `viking_add_resource(uri=uri)` to re-index a file in the semantic search database. |
+| `llm_judge_precision(query)` | Re-run the Section 4 Step 3 LLM-as-Judge prompt for one query against its `viking_results`. Return precision as float (0.0-1.0). |
+| `execute_pending_action(action, project_root)` | Execute one approved action — see Section 8 inline logic for DELETE/ARCHIVE/CREATE handling. |
+| `update_state_and_history(flow_score)` | Write updated `state.json` + append to `history/`. Same logic as Section 7 Steps 1d-1e. |
+| `read_calibration_accuracy(path)` | Read `.neuraltree/calibration.json`, return `accuracy` field (default 0.5 if file missing or field absent). |
+| `now_iso8601()` | Current datetime in ISO 8601 format, e.g. `2026-04-05T14:30:00Z`. |
+| `today_iso8601()` | Current date in ISO 8601 format, e.g. `2026-04-05`. |
+| `now()` | Current datetime object (for arithmetic like computing deltas). |
+| `parse_iso(timestamp)` | Parse an ISO 8601 timestamp string into a datetime object. |
+| `summarize_fixes(kept_list)` | Count fix types from the kept list: e.g. `["wire: 2", "index: 1"]`. Groups by `gap_type` and counts occurrences. |
+| `is_knowledge_file(path)` | True if file is `.md` and lives in `memory/`, `docs/`, or has YAML frontmatter. Config files, source code, and binaries return False. |
+| `git_log_modified_files(since)` | Run `git log --name-only --since={since}` and return deduplicated list of modified file paths. |
+| `describe_action(kept_entry)` | Generate a human-readable description of a kept action, e.g. "added ## Related (3 synapses)" or "re-indexed in Viking". |
+
+---
+
 ## Section 1: Activation
 
 When `/neuraltree` is invoked, execute these five steps in order. Do NOT skip steps. Do NOT proceed past a failed step unless explicitly noted.
@@ -25,7 +51,7 @@ When `/neuraltree` is invoked, execute these five steps in order. Do NOT skip st
 Both tool backends must be reachable before any work begins.
 
 1. **neuraltree-mcp** — call `neuraltree_scan(path=".", max_files=10000)`.
-   - If it returns a file inventory: **PASS**. Record the `total_files` count.
+   - If it returns a file inventory: **PASS**. Record the `total_count` count.
    - If it errors (connection refused, tool not found, timeout): **ABORT**.
      Print: `FATAL: neuraltree-mcp is not available. Install and configure it before running /neuraltree.`
      Release lock if acquired. Stop.
@@ -53,7 +79,7 @@ Read `.neuraltree/state.json` from the project root. This file is Skill-owned �
 **If it exists** — parse these fields:
 - `flow_score` (float, 0.0–1.0): last computed Flow Score
 - `last_run` (ISO 8601 timestamp): when the skill last completed a full run
-- `calibration_version` (int): prediction model version
+- `calibration_accuracy` (float): prediction model accuracy
 
 Determine mode from this decision table:
 
@@ -123,6 +149,38 @@ If the user invoked `/neuraltree` with a subcommand, route to the specific pipel
 | `/neuraltree` (no subcommand) | Mode-detected pipeline | Uses the mode from Step 2 to determine which pipeline sections to execute. |
 
 **Subcommand overrides mode.** If the user says `/neuraltree audit`, run the audit pipeline even if mode detection says `critical`. The user's explicit intent takes priority.
+
+**`/neuraltree fix` baseline recovery:** Since `fix` skips benchmarking, the `baseline` object must be reconstructed from the last run:
+
+```
+# Load baseline from last run
+import json
+state_path = ".neuraltree/state.json"
+queries_path = ".neuraltree/queries.json"
+
+if not os.path.exists(state_path):
+    emit("Cannot run /neuraltree fix without a previous benchmark. Run /neuraltree benchmark first.")
+    release_lock()
+    stop()
+
+with open(state_path) as f:
+    state = json.load(f)
+with open(queries_path) as f:
+    loaded_queries = json.load(f)
+
+baseline = {
+    "flow_score": state["flow_score"],
+    "metrics": {
+        "hop_efficiency": state.get("hop_efficiency", 0.0),
+        "synapse_coverage": state.get("synapse_coverage", 0.0),
+        "dead_neuron_ratio": state.get("dead_neuron_ratio", 0.0),
+        "freshness": state.get("freshness", 0.0),
+        "trunk_pressure": state.get("trunk_pressure", 0.0),
+        "precision_at_3": state.get("precision_at_3")
+    },
+    "queries": loaded_queries
+}
+```
 
 **Unknown subcommands:** Print `Unknown subcommand: {cmd}. Available: audit, fix, enforce, benchmark, auto` and ABORT (release lock).
 
@@ -275,7 +333,7 @@ last_verified: [YYYY-MM-DD — when a human or agent confirmed this is still acc
 - `name` — the topic, used for search and display
 - `description` — one line, appears in index listings and Viking search results
 - `type` — categorization for filtering (`user` = about the human, `feedback` = from reviews/retrospectives, `project` = about the codebase, `reference` = stable external knowledge)
-- `last_verified` — staleness detection. Files not verified in 90+ days get flagged by `neuraltree_diagnose()`
+- `last_verified` — staleness detection. Files not verified in 30+ days get flagged by `neuraltree_diagnose()`
 
 **Content** (20-80 lines):
 - Single topic per file. If you need a heading to separate concerns, you need two files.
@@ -456,15 +514,15 @@ Generate test queries that probe the project's information structure. These quer
 
 ```
 scan_result = neuraltree_scan(path=".", max_files=10000)
-index_paths = [f for f in scan_result["files"] if f["name"] == "_INDEX.md"]
+index_paths = [f for f in scan_result["files"] if os.path.basename(f) == "_INDEX.md"]
 
 result = neuraltree_generate_queries(
     project_root=".",
     claude_md_path="CLAUDE.md",
     memory_md_path="memory/MEMORY.md",
-    index_paths=[p["path"] for p in index_paths],
+    index_paths=index_paths,
     git_log_lines=100,
-    indexed_doc_count=scan_result["total_files"]
+    indexed_doc_count=scan_result["total_count"]
 )
 queries = result["queries"]
 ```
@@ -547,7 +605,7 @@ Returns:
 - `metrics.hop_efficiency` (float, 0.0–1.0): fraction of files reachable in ≤2 hops
 - `metrics.synapse_coverage` (float, 0.0–1.0): fraction of files with valid `## Related` links
 - `metrics.dead_neuron_ratio` (float, 0.0–1.0): fraction of files with NO incoming references (inverted — higher = better, fewer dead neurons)
-- `metrics.freshness` (float, 0.0–1.0): fraction of files verified within 90 days
+- `metrics.freshness` (float, 0.0–1.0): fraction of files verified within 30 days
 - `metrics.trunk_pressure` (float, 0.0–1.0): trunk files under 100-line limit (higher = better, less pressure)
 - `flow_score_partial` (float): weighted sum of structural metrics ONLY (precision_at_3 excluded — that's our job)
 - `flow_score_weights`: the weight configuration used
@@ -757,7 +815,7 @@ The MCP server returns:
 | Gap Type | Meaning | Example |
 |----------|---------|---------|
 | `SYNAPSE_GAP` | Files exist and are indexed, but lack `## Related` wiring between them | Query about "build rules" fails because `build_rules.md` doesn't link to `ci_config.md` |
-| `FRESHNESS_GAP` | File exists but `last_verified` is stale (>90 days), degrading its score | Memory file from 6 months ago — content may be accurate but staleness penalizes it |
+| `FRESHNESS_GAP` | File exists but `last_verified` is stale (>30 days), degrading its score | Memory file from 6 months ago — content may be accurate but staleness penalizes it |
 | `EMBEDDING_GAP` | File exists on disk but Viking hasn't indexed it, so semantic search misses it | New file added to `memory/` but never run through `openviking add-resource` |
 | `FOCUS_GAP` | File is too large (>80 lines) — Viking indexes it but the relevant section is diluted | A 200-line file where the answer is on line 150 — Viking returns the file but the match quality is low |
 | `CONTENT_GAP` | No file exists that answers this query — new content must be created | Query about a topic that was discussed verbally but never documented |
@@ -782,12 +840,11 @@ lesson_matches = neuraltree_lesson_match(
 
 ```
 for i, diag in enumerate(diagnosis["diagnoses"]):
-    matching_lessons = [
-        m for m in lesson_matches.get("matches", [])
-        if m["score"] > 0.5 and m["symptom_index"] == i
-    ]
-    if matching_lessons:
-        diag["prior_lesson"] = matching_lessons[0]  # best match
+    if i < len(lesson_matches.get("matches", [])):
+        symptom_result = lesson_matches["matches"][i]
+        top_lessons = [l for l in symptom_result["lessons"] if l["score"] > 0.5]
+        if top_lessons:
+            diag["prior_lesson"] = top_lessons[0]  # best match
 ```
 
 ### Step 4: Build Priority Queue
@@ -858,6 +915,16 @@ if lesson_count > 0:
 
 ```
 emit("Phase 3/5: All queries passing. Tree is healthy.")
+
+# Initialize autoloop_state with defaults (in case Section 6 is skipped)
+autoloop_state = {
+    "iteration": 0, "max_iterations": 10,
+    "score_history": [baseline["flow_score"]],
+    "attempted": set(), "kept": [], "discarded": [], "held": [],
+    "convergence_counter": 0
+}
+latest_metrics = dict(baseline["metrics"])
+current_flow_score = baseline["flow_score"]
 ```
 
 Skip Sections 5 Step 4 priority queue and proceed directly to **Section 7 (Enforce)** — there are no failures to fix, so the AutoLoop (Section 6) is unnecessary.
@@ -897,6 +964,7 @@ autoloop_state = {
     "convergence_counter": 0  # consecutive iterations with |delta| < 0.02
 }
 
+latest_metrics = dict(baseline["metrics"])  # copy baseline metrics as starting point
 current_flow_score = baseline["flow_score"]
 ```
 
@@ -994,7 +1062,7 @@ Apply the fix based on the gap type. Each gap type has a specific execution stra
 ```
 wire_result = neuraltree_wire(
     file_path=failure["target_file"],
-    all_leaf_paths=[f["path"] for f in scan_result["files"]],
+    all_leaf_paths=scan_result["files"],
     project_root="."
 )
 
