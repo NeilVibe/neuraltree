@@ -862,3 +862,468 @@ emit("Phase 3/5: All queries passing. Tree is healthy.")
 Skip Sections 5 Step 4 priority queue and proceed directly to **Section 7 (Enforce)** — there are no failures to fix, so the AutoLoop (Section 6) is unnecessary.
 
 **Proceed to Section 6 (AutoLoop) with the `priority_queue`, `diagnosis`, and updated `baseline`.**
+
+---
+
+## Section 6: Karpathy AutoLoop
+
+> Predict. Backup. Execute. Measure. Decide. Learn. Repeat until the tree is healthy or you've proven it can't be improved further.
+
+Inspired by Karpathy's autoresearch methodology: for each diagnosed failure, predict the impact of a fix, try it, measure the actual result, and make a data-driven decision. No guessing, no hoping — every change earns its place through measurement.
+
+### Exit Conditions
+
+Check these **after every iteration**, not just at the end. The loop terminates the moment ANY condition is met:
+
+1. **Healthy:** `flow_score > 0.85` — the tree is healthy enough. Stop improving.
+2. **Converged:** 3 consecutive iterations where `|delta| < 0.02` — changes aren't moving the needle anymore. Oscillation damping.
+3. **Hard cap:** 10 iterations reached — prevent runaway loops regardless of score.
+4. **Exhausted:** All failures in the priority queue have been addressed or skipped via dedup guard.
+
+### Initialize
+
+Before entering the loop, set up the tracking state:
+
+```
+autoloop_state = {
+    "iteration": 0,
+    "max_iterations": 10,
+    "score_history": [baseline["flow_score"]],
+    "attempted": set(),       # {(gap_type, target)} tuples for dedup
+    "kept": [],               # list of successful changes
+    "discarded": [],          # list of rolled-back changes
+    "held": [],               # list of changes kept but flagged for review
+    "convergence_counter": 0  # consecutive iterations with |delta| < 0.02
+}
+
+current_flow_score = baseline["flow_score"]
+```
+
+### Per-Iteration Steps
+
+For each failure in `priority_queue`, execute these 9 steps in order. Each step depends on the previous one — no parallelization within an iteration.
+
+#### Step 1: Dedup Guard
+
+Before attempting any fix, check whether this exact (gap_type, target) combination has already been tried. This prevents wasting iterations on the same failure when the fix didn't work or the failure is a duplicate.
+
+```
+dedup_key = (failure["gap_type"], failure.get("target_file", failure.get("query", "")))
+
+if dedup_key in autoloop_state["attempted"]:
+    # Already tried this exact fix — skip to next failure in queue
+    continue
+
+autoloop_state["attempted"].add(dedup_key)
+```
+
+**Why dedup matters:** Without this guard, the loop can waste iterations re-attempting fixes that already failed. A SYNAPSE_GAP between files A and B is the same gap whether it appears in query 1 or query 7 — fix it once, measure once.
+
+#### Step 2: Predict
+
+Before making any change, ask the prediction engine what it expects will happen. This creates the baseline for the KEEP/HOLD/DISCARD decision in Step 6.
+
+Map the gap type to the proposed action:
+
+```
+ACTION_MAP = {
+    "SYNAPSE_GAP":   "wire",
+    "FRESHNESS_GAP": "update_freshness",
+    "EMBEDDING_GAP": "index",
+    "FOCUS_GAP":     "split",
+    "CONTENT_GAP":   "wire",  # create file + wire (content provided by user)
+}
+
+proposed_action = ACTION_MAP[failure["gap_type"]]
+```
+
+Call the prediction tool:
+
+```
+prediction = neuraltree_predict(
+    current_metrics={
+        "flow_score": current_flow_score,
+        "hop_efficiency": latest_metrics["hop_efficiency"],
+        "synapse_coverage": latest_metrics["synapse_coverage"],
+        "dead_neuron_ratio": latest_metrics["dead_neuron_ratio"],
+        "freshness": latest_metrics["freshness"],
+        "trunk_pressure": latest_metrics["trunk_pressure"],
+        "precision_at_3": latest_metrics.get("precision_at_3")
+    },
+    proposed_changes=[{
+        "action": proposed_action,
+        "target": failure.get("target_file", failure.get("query", "")),
+        "gap_type": failure["gap_type"]
+    }],
+    project_root="."
+)
+
+predicted_delta = prediction["predicted_delta"]
+```
+
+Emit: `Phase 4/5: AutoLoop iteration {n}/10 — predicting impact of {proposed_action} on {target}...`
+
+**If `predicted_delta < 0.001`:** The prediction engine expects no measurable improvement. Log and skip to the next failure:
+
+```
+if predicted_delta < 0.001:
+    emit(f"  Predicted delta {predicted_delta:.4f} — too small, skipping")
+    continue
+```
+
+#### Step 3: Backup
+
+Before touching any file, create a restorable backup. This is the safety net that makes DISCARD possible.
+
+```
+backup_result = neuraltree_backup(
+    files=[failure["target_file"]],
+    project_root="."
+)
+```
+
+**Important:** The backup captures the exact file state before the fix. If the fix makes things worse, Step 6 can restore to this exact state. Without backup, DISCARD would be impossible and every change would be permanent.
+
+#### Step 4: Execute the Fix
+
+Apply the fix based on the gap type. Each gap type has a specific execution strategy:
+
+**SYNAPSE_GAP — Wire missing `## Related` links:**
+
+```
+wire_result = neuraltree_wire(
+    file_path=failure["target_file"],
+    all_leaf_paths=scan_result["files"],
+    project_root="."
+)
+
+# Apply the suggested wiring content
+# neuraltree_wire() returns suggested_content with ## Related links
+# Write the updated content to the file
+apply_suggested_content(failure["target_file"], wire_result["suggested_content"])
+```
+
+**FRESHNESS_GAP — Update `last_verified` in frontmatter:**
+
+```
+# Read the file, parse frontmatter, update last_verified to today
+update_frontmatter(failure["target_file"], {"last_verified": today_iso8601()})
+```
+
+Only update `last_verified` if the content has been verified as still accurate. The autoloop confirms accuracy by checking:
+- The file's `## Related` links are not dead
+- The file's `## Docs` references still exist
+- The content doesn't contradict current project state (checked via Viking search)
+
+If verification fails, skip this fix and flag for manual review.
+
+**EMBEDDING_GAP — Add to Viking index:**
+
+```
+viking_add_resource(
+    uri=failure["target_file"],
+    content=read_file(failure["target_file"])
+)
+```
+
+**FOCUS_GAP — Split oversized file into focused neurons:**
+
+This is the most complex fix. It requires user awareness because it creates new files and modifies existing structure.
+
+```
+# 1. Identify logical sections in the oversized file
+# 2. Create new leaf files for each section (following Perfect Neuron Format)
+# 3. Wire each new leaf with ## Related links to its siblings
+# 4. Update the parent _INDEX.md to reference new leaves instead of the monolith
+# 5. Add each new leaf to Viking
+# 6. Update any files that referenced the original to point to the correct new leaf
+
+emit(f"  FOCUS_GAP: Splitting {failure['target_file']} into focused neurons")
+# ... split logic ...
+for new_leaf in new_leaves:
+    neuraltree_wire(file_path=new_leaf, all_leaf_paths=updated_leaf_paths, project_root=".")
+    viking_add_resource(uri=new_leaf, content=read_file(new_leaf))
+```
+
+**CONTENT_GAP — Flag as PENDING ACTION:**
+
+Content gaps cannot be auto-fixed because they require new knowledge that doesn't exist in the project yet. The autoloop does NOT auto-generate content — that would produce hallucinated documentation.
+
+```
+emit(f"  CONTENT_GAP: {failure['query']} — requires new content")
+emit(f"  PENDING ACTION: User must provide content for this topic")
+emit(f"  Suggested file: {failure.get('suggested_path', 'TBD')}")
+
+# Record as HOLD — the gap is real but the fix requires human input
+autoloop_state["held"].append({
+    "gap_type": "CONTENT_GAP",
+    "query": failure["query"],
+    "reason": "Content does not exist — user must provide",
+    "suggested_path": failure.get("suggested_path", "TBD")
+})
+continue  # Skip to next failure — no measurement needed
+```
+
+#### Step 5: Measure
+
+After applying the fix, re-measure everything. No assumptions about improvement — prove it with numbers.
+
+**5a. Re-run structural scoring:**
+
+```
+new_score_result = neuraltree_score(project_root=".")
+```
+
+**5b. Re-run Viking search for affected queries:**
+
+```
+affected_queries = [
+    q for q in baseline["queries"]
+    if failure["target_file"] in q.get("source", "")
+    or failure["target_file"] in str(q.get("viking_results", []))
+]
+
+for query in affected_queries:
+    viking_result = viking_search(query=query["text"], limit=3)
+    query["viking_results"] = viking_result["results"]
+    # Re-run LLM judge on new results
+    query["precision"] = llm_judge_precision(query)
+```
+
+**5c. Recompute precision_at_3:**
+
+```
+new_precision_at_3 = mean(q["precision"] for q in baseline["queries"] if q.get("precision") is not None)
+```
+
+**5d. Assemble new Flow Score:**
+
+```
+new_flow_score = new_score_result["flow_score_partial"] + (new_precision_at_3 * 0.25)
+actual_delta = new_flow_score - current_flow_score
+```
+
+Emit: `Phase 4/5: AutoLoop iteration {n}/10 — Flow Score {current_flow_score:.3f} → {new_flow_score:.3f} ({actual_delta:+.3f})`
+
+#### Step 6: Decide — KEEP / HOLD / DISCARD
+
+Compare the actual improvement against the prediction. The ratio determines the decision:
+
+```
+ratio = actual_delta / max(abs(predicted_delta), 0.001)
+```
+
+**KEEP** — `ratio >= 0.8`:
+
+The fix delivered at least 80% of the predicted improvement. Commit the change.
+
+```
+if ratio >= 0.8:
+    current_flow_score = new_flow_score
+    latest_metrics = new_score_result["metrics"]
+    latest_metrics["precision_at_3"] = new_precision_at_3
+    autoloop_state["kept"].append({
+        "gap_type": failure["gap_type"],
+        "target": failure.get("target_file", ""),
+        "predicted_delta": predicted_delta,
+        "actual_delta": actual_delta,
+        "ratio": ratio
+    })
+    emit(f"  KEEP — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f})")
+```
+
+**HOLD** — `0.5 <= ratio < 0.8`:
+
+The fix helped but underperformed predictions. Keep the change in place but flag it for user review.
+
+```
+elif 0.5 <= ratio < 0.8:
+    current_flow_score = new_flow_score
+    latest_metrics = new_score_result["metrics"]
+    latest_metrics["precision_at_3"] = new_precision_at_3
+    autoloop_state["held"].append({
+        "gap_type": failure["gap_type"],
+        "target": failure.get("target_file", ""),
+        "predicted_delta": predicted_delta,
+        "actual_delta": actual_delta,
+        "ratio": ratio,
+        "reason": "Underperformed prediction — review recommended"
+    })
+    emit(f"  HOLD — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f})")
+```
+
+**DISCARD** — `ratio < 0.5`:
+
+The fix failed to deliver meaningful improvement — or made things worse. Roll back to the backup.
+
+```
+else:
+    neuraltree_restore(
+        files=[failure["target_file"]],
+        project_root="."
+    )
+    autoloop_state["discarded"].append({
+        "gap_type": failure["gap_type"],
+        "target": failure.get("target_file", ""),
+        "predicted_delta": predicted_delta,
+        "actual_delta": actual_delta,
+        "ratio": ratio
+    })
+    emit(f"  DISCARD — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f}), restored from backup")
+```
+
+#### Step 7: Update Calibration
+
+After every decision, feed the prediction/actual pair back to the calibration system. This makes future predictions more accurate.
+
+```
+neuraltree_update_calibration(
+    predicted_delta=predicted_delta,
+    actual_delta=actual_delta,
+    project_root="."
+)
+```
+
+The calibration system tracks prediction accuracy over time. Early predictions may be wildly off — that's expected. By iteration 5-6, the system should be calibrating within 20% of actual results. If calibration accuracy remains below 50% after 10+ runs across sessions, the prediction model needs retraining (recorded as a lesson).
+
+#### Step 8: Record Lesson
+
+Every KEEP and DISCARD generates a lesson for future autoloop sessions. HOLD does not generate a lesson — the outcome is ambiguous.
+
+**On KEEP — record what worked:**
+
+```
+neuraltree_lesson_add(
+    domain=failure["gap_type"].lower(),
+    lesson=f"KEEP: {failure['gap_type']} fix on {failure.get('target_file', 'unknown')} — "
+           f"predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f}). "
+           f"Action: {proposed_action}. Score improved {current_flow_score - actual_delta:.3f} → {current_flow_score:.3f}.",
+    project_root="."
+)
+```
+
+**On DISCARD — record what didn't work:**
+
+```
+neuraltree_lesson_add(
+    domain=failure["gap_type"].lower(),
+    lesson=f"DISCARD: {failure['gap_type']} fix on {failure.get('target_file', 'unknown')} — "
+           f"predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f}). "
+           f"Action: {proposed_action}. Fix rolled back. "
+           f"Warning: this target may resist automated {proposed_action} — consider manual intervention.",
+    project_root="."
+)
+```
+
+This is **integration point #3** from the handoff — lessons are recorded after autoloop KEEP/HOLD/DISCARD decisions. Future runs use `neuraltree_lesson_match()` (Section 5, Step 3) to check whether a similar fix has been tried before and what happened.
+
+#### Step 9: Check Exit Conditions
+
+After every iteration, check all four exit conditions. The order matters — check the most desirable outcome first.
+
+```
+autoloop_state["iteration"] += 1
+autoloop_state["score_history"].append(current_flow_score)
+
+# --- Convergence detection ---
+if len(autoloop_state["score_history"]) >= 2:
+    delta = abs(autoloop_state["score_history"][-1] - autoloop_state["score_history"][-2])
+    if delta < 0.02:
+        autoloop_state["convergence_counter"] += 1
+    else:
+        autoloop_state["convergence_counter"] = 0
+
+# --- Oscillation detection ---
+# Check for alternating up/down/up pattern in last 4 scores
+oscillating = False
+if len(autoloop_state["score_history"]) >= 4:
+    recent = autoloop_state["score_history"][-4:]
+    deltas = [recent[i+1] - recent[i] for i in range(3)]
+    # Oscillation: signs alternate (positive, negative, positive or vice versa)
+    if (deltas[0] > 0 and deltas[1] < 0 and deltas[2] > 0) or \
+       (deltas[0] < 0 and deltas[1] > 0 and deltas[2] < 0):
+        oscillating = True
+
+# --- Check exit conditions ---
+exit_reason = None
+
+# 1. Healthy
+if current_flow_score > 0.85:
+    exit_reason = f"Flow Score {current_flow_score:.3f} > 0.85 — tree is healthy"
+
+# 2. Converged (includes oscillation damping)
+elif autoloop_state["convergence_counter"] >= 3:
+    exit_reason = f"Converged — 3 consecutive iterations with |delta| < 0.02"
+elif oscillating:
+    exit_reason = f"Oscillation detected — score alternating without net improvement"
+
+# 3. Hard cap
+elif autoloop_state["iteration"] >= autoloop_state["max_iterations"]:
+    exit_reason = f"Hard cap — {autoloop_state['max_iterations']} iterations reached"
+
+# 4. Exhausted
+elif all(
+    (d["gap_type"], d.get("target_file", d.get("query", ""))) in autoloop_state["attempted"]
+    for d in priority_queue
+):
+    exit_reason = f"Exhausted — all {len(priority_queue)} failures addressed or skipped"
+
+if exit_reason:
+    break  # Exit the autoloop
+```
+
+### AutoLoop Summary
+
+After exiting the loop, emit a structured summary of what happened:
+
+```
+kept_count = len(autoloop_state["kept"])
+discarded_count = len(autoloop_state["discarded"])
+held_count = len(autoloop_state["held"])
+iterations = autoloop_state["iteration"]
+baseline_score = autoloop_state["score_history"][0]
+final_score = autoloop_state["score_history"][-1]
+delta = final_score - baseline_score
+
+emit(f"AutoLoop complete — {exit_reason}")
+emit(f"Iterations: {iterations}, KEEP: {kept_count}, DISCARD: {discarded_count}, HOLD: {held_count}")
+emit(f"Flow Score: {baseline_score:.3f} → {final_score:.3f} ({delta:+.3f})")
+```
+
+**Detailed breakdown (always shown):**
+
+```
+if autoloop_state["kept"]:
+    emit("KEPT changes:")
+    for k in autoloop_state["kept"]:
+        emit(f"  ✓ {k['gap_type']} on {k['target']} — delta {k['actual_delta']:+.3f}")
+
+if autoloop_state["discarded"]:
+    emit("DISCARDED changes (rolled back):")
+    for d in autoloop_state["discarded"]:
+        emit(f"  ✗ {d['gap_type']} on {d['target']} — predicted {d['predicted_delta']:+.3f}, actual {d['actual_delta']:+.3f}")
+
+if autoloop_state["held"]:
+    emit("HELD for review:")
+    for h in autoloop_state["held"]:
+        emit(f"  ? {h['gap_type']} on {h.get('target', h.get('query', 'unknown'))} — {h.get('reason', 'review recommended')}")
+```
+
+### Degraded Mode Behavior
+
+When operating in degraded mode (no Viking), the AutoLoop has reduced capabilities:
+
+- **EMBEDDING_GAP fixes are skipped entirely** — Viking is unavailable, so re-indexing is impossible
+- **Step 5b (Viking re-search) is skipped** — precision_at_3 remains null throughout
+- **Flow Score is computed using the degraded formula** (Section 4, Degraded Mode)
+- **The 0.75 cap still applies** — the loop cannot push past HEALTHY without semantic verification
+- **Fewer iterations are typical** — without semantic scoring, fewer gap types can be addressed
+
+Emit once at loop start if degraded:
+
+```
+if DEGRADED_MODE:
+    emit("WARNING: AutoLoop running in DEGRADED mode — EMBEDDING_GAP fixes disabled, semantic scoring unavailable")
+```
+
+**Proceed to Section 7 (Enforce) with the `autoloop_state` and updated metrics.**
