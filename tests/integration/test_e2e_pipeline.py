@@ -121,3 +121,84 @@ class TestBenchmarkPipeline:
         assert "current_flow_score" in result
         assert "predicted_flow_score" in result
         assert result["predicted_flow_score"] >= result["current_flow_score"]
+
+
+class TestBackupRestore:
+    """Backup/restore round-trip and wire read-only verification."""
+
+    def test_backup_and_restore_single_file(self, tmp_project):
+        """Backup coding.md, overwrite it, restore it, verify original content."""
+        coding_path = tmp_project / "memory" / "rules" / "coding.md"
+        original_content = coding_path.read_text()
+
+        # Backup
+        result = call_tool("neuraltree_backup", {
+            "files": ["memory/rules/coding.md"],
+            "project_root": str(tmp_project),
+        })
+        assert "error" not in result
+        assert "memory/rules/coding.md" in result["backed_up"]
+
+        # Overwrite with different content
+        coding_path.write_text("# OVERWRITTEN\nThis is not the original.\n")
+        assert coding_path.read_text() != original_content
+
+        # Restore
+        result = call_tool("neuraltree_restore", {
+            "files": ["memory/rules/coding.md"],
+            "project_root": str(tmp_project),
+        })
+        assert "error" not in result
+        assert "memory/rules/coding.md" in result["restored"]
+
+        # Verify original content is back
+        assert coding_path.read_text() == original_content
+
+    def test_backup_multiple_files(self, tmp_project):
+        """Backup coding.md + testing.md, modify both, restore both, verify originals."""
+        coding_path = tmp_project / "memory" / "rules" / "coding.md"
+        testing_path = tmp_project / "memory" / "rules" / "testing.md"
+        original_coding = coding_path.read_text()
+        original_testing = testing_path.read_text()
+
+        # Backup both
+        result = call_tool("neuraltree_backup", {
+            "files": ["memory/rules/coding.md", "memory/rules/testing.md"],
+            "project_root": str(tmp_project),
+        })
+        assert "error" not in result
+        assert len(result["backed_up"]) == 2
+
+        # Overwrite both
+        coding_path.write_text("# DESTROYED coding\n")
+        testing_path.write_text("# DESTROYED testing\n")
+        assert coding_path.read_text() != original_coding
+        assert testing_path.read_text() != original_testing
+
+        # Restore both (pass None to restore all)
+        result = call_tool("neuraltree_restore", {
+            "project_root": str(tmp_project),
+        })
+        assert "error" not in result
+        assert len(result["restored"]) >= 2
+
+        # Verify both originals are back
+        assert coding_path.read_text() == original_coding
+        assert testing_path.read_text() == original_testing
+
+    def test_wire_preview_is_read_only(self, tmp_project):
+        """Wire returns suggestions but does NOT modify the target file."""
+        coding_path = tmp_project / "memory" / "rules" / "coding.md"
+        original_content = coding_path.read_text()
+
+        # Call wire on coding.md
+        result = call_tool("neuraltree_wire", {
+            "file_path": "memory/rules/coding.md",
+            "project_root": str(tmp_project),
+        })
+        assert "error" not in result
+        # Wire should return suggestions
+        assert "suggested_content" in result
+
+        # Verify file content is UNCHANGED
+        assert coding_path.read_text() == original_content
