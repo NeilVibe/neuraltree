@@ -6,13 +6,29 @@
 
 `/neuraltree` is a skill + MCP server that transforms any project into a neural tree — a structured information system where any fact is reachable in 0-2 hops, every node is wired to related nodes, and semantic search catches what structure misses.
 
+## Current Status
+
+**Phase 1 + 1.5 COMPLETE.** MCP server built, tested, security-hardened.
+**Phase 2 NEXT:** Build `src/skill/SKILL.md` — the orchestration brain.
+**Handoff doc:** `docs/HANDOFF.md` has full context for Phase 2.
+
 ## Architecture
 
 ```
-Skill (SKILL.md) = THE BRAIN — orchestrates everything
-MCP Server (neuraltree-mcp) = THE MUSCLE — 13 tools for filesystem ops
+Skill (SKILL.md) = THE BRAIN — orchestrates everything (Phase 2 — NOT YET BUILT)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 16 tools (BUILT, TESTED, REVIEWED)
 Viking MCP = THE MEMORY — semantic search (required dependency)
 ```
+
+## MCP Server — 16 Tools
+
+| Category | Tools |
+|----------|-------|
+| Filesystem | scan, trace, backup, restore |
+| Intelligence | wire, generate_queries |
+| Lessons | lesson_match, lesson_add |
+| Scoring | score, diagnose, predict, update_calibration |
+| Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
 
 ## Project Structure
 
@@ -21,31 +37,36 @@ neuraltree/
 ├── CLAUDE.md                    This file
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
-│   │   ├── __init__.py
-│   │   ├── server.py            Main MCP server entry point
-│   │   ├── tools/               Tool implementations (one file per tool)
-│   │   ├── scoring/             Scoring engine (metrics, flow score)
-│   │   └── sandbox/             Sandbox virtualization
+│   │   ├── __init__.py          Version 0.1.0
+│   │   ├── server.py            Entry point — registers all 16 tools
+│   │   ├── validation.py        Path traversal prevention (all tools use this)
+│   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
+│   │   ├── tools/               6 tool modules (scan, trace, backup, wire, generate_queries, lesson)
+│   │   ├── scoring/             3 modules (score, diagnose, predict+update_calibration)
+│   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
-│       └── SKILL.md             The skill instruction file
-├── tests/
-│   ├── unit/                    Unit tests per tool
-│   ├── integration/             MCP server integration tests
-│   └── mock/                    Mock tests with simulated projects
+│       └── SKILL.md             The skill instruction file (Phase 2 — NOT YET BUILT)
+├── tests/                       175 tests passing
+│   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
+│   ├── unit/                    11 test files
+│   └── integration/             2 test files (mcp.call_tool() end-to-end)
 ├── docs/
-│   └── specs/                   Design specs
-├── logs/                        Test run logs
+│   ├── specs/                   Design spec v5 (reviewed by 25 agents)
+│   ├── FEATURE_INCIDENT_MEMORY.md  Lesson feature design
+│   ├── PHASE1_PLAN.md           Phase 1 plan (COMPLETED)
+│   ├── PHASE1_5_PLAN.md         Phase 1.5 plan (COMPLETED)
+│   └── HANDOFF.md               Full Phase 2 handoff with integration points
 ├── requirements.txt             Python dependencies
 └── README.md                    Public docs
 ```
 
 ## Development Protocol
 
-1. **Plan before code** — write what you'll build, review it, then build
-2. **Test after every tool** — unit test each MCP tool independently
-3. **Mock test with simulated projects** — don't just test on LocaNext
-4. **Review after building** — spawn review agents after each phase
-5. **Log everything** — test results, review findings, decisions
+1. **Plan before code** — write what you'll build, review with agents, then build
+2. **Test after every tool** — unit test + integration test via mcp.call_tool()
+3. **Review after building** — spawn 5-6 review agents (code quality, security, silent failures, tests, spec compliance, architecture)
+4. **Multiple review rounds** — 3-4 rounds until all agents say SHIP/CLEAN
+5. **Security first** — all tools validate project_root, all file writes use validate_within_root
 
 ## Key Principles
 
@@ -55,27 +76,41 @@ neuraltree/
 - **User Approves Destructive Actions:** Autoloop thinks, user decides on deletes/moves.
 - **Sandbox First:** Autoloop runs in isolated git worktree, never touches real project.
 
-## Spec
+## Key Integration Points for Phase 2
 
-Full design spec: `docs/specs/2026-04-04-neuraltree-skill-design.md`
-- 5 review rounds, 25 agents, 9/10 SHIP verdict
+1. `neuraltree_score()` returns `precision_at_3: null` — Skill fills it via Viking + LLM judge
+2. `neuraltree_diagnose()` needs `viking_results` param for EMBEDDING_GAP classification
+3. `.neuraltree/state.json` is Skill-owned, not MCP-managed
+4. Lesson recording happens after autoloop KEEP/HOLD/DISCARD decisions
+5. Flow Score assembly: `flow_score_partial + (precision_at_3 * 0.25)`
+
+## Specs
+
+- Full design spec: `docs/specs/2026-04-04-neuraltree-skill-design.md`
+- Lesson feature: `docs/FEATURE_INCIDENT_MEMORY.md`
+- Phase 2 handoff: `docs/HANDOFF.md`
 
 ## Dependencies
 
 - Python 3.11+
-- fastmcp
+- fastmcp>=2.0.0
 - Viking MCP (OpenViking) — required for semantic search
 - Model2Vec — powers Viking embeddings
 
 ## Commands
 
 ```bash
+# Run tests (175 passing)
+PYTHONPATH=src python3.11 -m pytest tests/ -v
+
+# Verify all 16 tools load
+PYTHONPATH=src python3.11 -c "
+import asyncio
+from neuraltree_mcp.server import mcp
+tools = asyncio.run(mcp.list_tools())
+print(f'{len(tools)} tools: {[t.name for t in tools]}')
+"
+
 # Run MCP server
-python -m neuraltree_mcp.server
-
-# Run tests
-pytest tests/
-
-# Run specific tool test
-pytest tests/unit/test_scan.py -v
+PYTHONPATH=src python3.11 -m neuraltree_mcp.server
 ```
