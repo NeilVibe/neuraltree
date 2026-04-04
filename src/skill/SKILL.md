@@ -500,6 +500,15 @@ Subcommands that skip phases should still indicate what was skipped:
 
 This ensures the user understands why the run is shorter than usual.
 
+### Subcommand Phase Adjustment
+
+When a subcommand skips phases, adjust the denominator:
+- `/neuraltree audit`: Phase 1/2 (Scan), Phase 2/2 (Benchmark)
+- `/neuraltree fix`: Phase 1/3 (Diagnose), Phase 2/3 (AutoLoop), Phase 3/3 (Enforce)
+- `/neuraltree enforce`: Phase 1/1 (Enforce)
+- `/neuraltree benchmark`: Phase 1/2 (Scan), Phase 2/2 (Benchmark)
+- `/neuraltree auto` and default: Phase N/5 (full pipeline)
+
 ---
 
 ## Section 4: Benchmark Protocol
@@ -612,11 +621,11 @@ Returns:
 - `details`: per-file breakdown for diagnostics
 - `warnings`: any structural issues detected
 
-**Note:** `score_result` returns `precision_at_3: null` — the MCP server cannot compute it because it requires Viking + LLM judgment. We computed it in Steps 2-3. This is **integration point #1** from the handoff.
+**Note:** `score_result` returns `precision_at_3: null` — the MCP server cannot compute it because it requires Viking + LLM judgment. We computed it in Steps 2-3.
 
 ### Step 5: Assemble Flow Score
 
-Combine the structural metrics (from MCP) with the semantic metric (from Viking + LLM judge) into the composite Flow Score. This is **integration point #5** — two-phase scoring.
+Combine the structural metrics (from MCP) with the semantic metric (from Viking + LLM judge) into the composite Flow Score.
 
 **Full mode (Viking available):**
 
@@ -783,7 +792,9 @@ If `failed_queries` is empty, all queries passed — skip to Step 5 (emit health
 
 ### Step 2: Classify Failures
 
-Call `neuraltree_diagnose` with the failed queries AND their Viking results. This is **integration point #2** from the handoff — the MCP server needs `viking_results` to distinguish EMBEDDING_GAP (content exists but Viking can't find it) from CONTENT_GAP (content doesn't exist at all).
+Call `neuraltree_diagnose` with the failed queries AND their Viking results. The MCP server needs `viking_results` to distinguish EMBEDDING_GAP (content exists but Viking can't find it) from CONTENT_GAP (content doesn't exist at all).
+
+**DEGRADED_MODE note:** In DEGRADED_MODE, `viking_results_for_diagnose` will be empty lists (no Viking results available). All EMBEDDING_GAP results will be reclassified to SYNAPSE_GAP after diagnosis (see Section 9).
 
 ```
 viking_results_for_diagnose = []
@@ -801,6 +812,14 @@ diagnosis = neuraltree_diagnose(
     project_root=".",
     viking_results=viking_results_for_diagnose
 )
+
+# In DEGRADED_MODE, reclassify EMBEDDING_GAP → SYNAPSE_GAP
+if DEGRADED_MODE:
+    for d in diagnosis["diagnoses"]:
+        if d["gap_type"] == "EMBEDDING_GAP":
+            d["gap_type"] = "SYNAPSE_GAP"
+    diagnosis["gap_counts"]["SYNAPSE_GAP"] = diagnosis["gap_counts"].get("SYNAPSE_GAP", 0) + diagnosis["gap_counts"].get("EMBEDDING_GAP", 0)
+    diagnosis["gap_counts"]["EMBEDDING_GAP"] = 0
 ```
 
 The MCP server returns:
@@ -885,6 +904,17 @@ priority_queue = sorted(
 )
 ```
 
+### Step 4b: Parallel Investigation (Complex Audits Only)
+
+For projects with > 100 diagnosed failures or when multiple directories need auditing:
+
+1. Spawn 3-5 investigation agents in parallel, each assigned a subset of failures
+2. Each agent: calls `neuraltree_trace()` on its targets, reports keep/archive/delete recommendation with proof
+3. Skill synthesizes findings into unified report
+4. User approves before any destructive action
+
+For typical runs (< 100 failures): skip this step, proceed to AutoLoop.
+
 ### Step 5: Emit Diagnosis Summary
 
 Emit a structured status message summarizing the diagnosis results.
@@ -948,11 +978,35 @@ Check these **after every iteration**, not just at the end. The loop terminates 
 3. **Hard cap:** 10 iterations reached — prevent runaway loops regardless of score.
 4. **Exhausted:** All failures in the priority queue have been addressed or skipped via dedup guard.
 
+### Sandbox Mode (Optional)
+
+For first runs on unknown projects or when flow_score < 0.60 (critical mode):
+- Consider using sandbox for maximum safety:
+  1. neuraltree_sandbox_create() → isolated copy
+  2. Run AutoLoop on sandbox copy
+  3. neuraltree_sandbox_diff() → review changes
+  4. User approves → neuraltree_sandbox_apply()
+  5. neuraltree_sandbox_destroy() → cleanup
+
+For health-check and maintenance modes: sandbox is optional (backup/restore provides sufficient safety).
+
+Note: The current AutoLoop operates directly on project files with backup/restore as the safety net.
+Sandbox integration provides stronger isolation but adds complexity. Use when risk is high.
+
 ### Initialize
 
 Before entering the loop, set up the tracking state:
 
 ```
+# Variables carried from previous sections (must remain in scope):
+# - baseline: from Section 4, Step 6 (metric snapshot)
+# - diagnosis: from Section 5, Step 2 (failure classifications)
+# - priority_queue: from Section 5, Step 4 (ordered failures)
+# - scan_result: from Section 4, Step 1 (filesystem inventory)
+# - autoloop_state: initialized in Section 5, Step 5
+# - latest_metrics: initialized below
+# - current_flow_score: initialized below
+
 autoloop_state = {
     "iteration": 0,
     "max_iterations": 10,
@@ -1089,29 +1143,31 @@ If verification fails, skip this fix and flag for manual review.
 **EMBEDDING_GAP — Add to Viking index:**
 
 ```
+# In DEGRADED_MODE, EMBEDDING_GAP was reclassified to SYNAPSE_GAP in Section 5.
+# This block should not be reached in DEGRADED_MODE. Guard defensively:
+if DEGRADED_MODE:
+    continue  # Skip — Viking unavailable, cannot re-index
+
 viking_add_resource(
     uri=failure["target_file"],
     content=read_file(failure["target_file"])
 )
 ```
 
-**FOCUS_GAP — Split oversized file into focused neurons:**
+**FOCUS_GAP — Route to HOLD for user review:**
 
-This is the most complex fix. It requires user awareness because it creates new files and modifies existing structure.
+FOCUS_GAP splits are complex operations that require user judgment on section boundaries. The autoloop does NOT auto-split files.
 
 ```
-# 1. Identify logical sections in the oversized file
-# 2. Create new leaf files for each section (following Perfect Neuron Format)
-# 3. Wire each new leaf with ## Related links to its siblings
-# 4. Update the parent _INDEX.md to reference new leaves instead of the monolith
-# 5. Add each new leaf to Viking
-# 6. Update any files that referenced the original to point to the correct new leaf
-
-emit(f"  FOCUS_GAP: Splitting {failure['target_file']} into focused neurons")
-# ... split logic ...
-for new_leaf in new_leaves:
-    neuraltree_wire(file_path=new_leaf, all_leaf_paths=updated_leaf_paths, project_root=".")
-    viking_add_resource(uri=new_leaf, content=read_file(new_leaf))
+# FOCUS_GAP: Route to HOLD — do not auto-split
+autoloop_state["held"].append({
+    "failure": failure,
+    "gap_type": "FOCUS_GAP",
+    "target": failure["target_file"],
+    "reason": "FOCUS_GAP splits require user judgment on section boundaries",
+    "suggested_action": f"Split {failure['target_file']} into focused leaves"
+})
+continue  # Skip to next failure — do not auto-split
 ```
 
 **CONTENT_GAP — Flag as PENDING ACTION:**
@@ -1146,17 +1202,19 @@ new_score_result = neuraltree_score(project_root=".")
 **5b. Re-run Viking search for affected queries:**
 
 ```
-affected_queries = [
-    q for q in baseline["queries"]
-    if failure["target_file"] in q.get("source", "")
-    or failure["target_file"] in str(q.get("viking_results", []))
-]
+# In DEGRADED_MODE, skip Viking re-search. Re-score using structural metrics only.
+if not DEGRADED_MODE:
+    affected_queries = [
+        q for q in baseline["queries"]
+        if failure["target_file"] in q.get("source", "")
+        or failure["target_file"] in str(q.get("viking_results", []))
+    ]
 
-for query in affected_queries:
-    viking_result = viking_search(query=query["text"], limit=3)
-    query["viking_results"] = viking_result["results"]
-    # Re-run LLM judge on new results
-    query["precision"] = llm_judge_precision(query)
+    for query in affected_queries:
+        viking_result = viking_search(query=query["text"], limit=3)
+        query["viking_results"] = viking_result["results"]
+        # Re-run LLM judge on new results
+        query["precision"] = llm_judge_precision(query)
 ```
 
 **5c. Recompute precision_at_3:**
@@ -1289,7 +1347,7 @@ neuraltree_lesson_add(
 )
 ```
 
-This is **integration point #3** from the handoff — lessons are recorded after autoloop KEEP/HOLD/DISCARD decisions. Future runs use `neuraltree_lesson_match()` (Section 5, Step 3) to check whether a similar fix has been tried before and what happened.
+Lessons are recorded after autoloop KEEP/HOLD/DISCARD decisions. Future runs use `neuraltree_lesson_match()` (Section 5, Step 3) to check whether a similar fix has been tried before and what happened.
 
 #### Step 9: Check Exit Conditions
 
@@ -1555,6 +1613,11 @@ This is the persistent state that the Skill reads on next activation (Section 1,
 ```
 
 ```
+# Load previous state (from Section 1, Step 2 — carried forward as previous_state)
+previous_state = {}  # default for first run
+if os.path.exists(".neuraltree/state.json"):
+    previous_state = json.load(open(".neuraltree/state.json"))
+
 state = {
     "flow_score": current_flow_score,
     "last_run": now_iso8601(),
@@ -1576,15 +1639,24 @@ with open(".neuraltree/queries.json", "w") as f:
     json.dump(evolved_queries, f, indent=2)
 ```
 
-**1g. Delete .tmp/ entirely.**
+**1g. Clean .tmp/ working files (retain backups).**
 
-The `.neuraltree/.tmp/` directory holds backup files created during the AutoLoop. Now that all decisions are finalized (KEEP = committed, DISCARD = restored), the backups serve no purpose.
+The `.neuraltree/.tmp/` directory holds both working files (iteration logs, prediction buffers) and backup files created during the AutoLoop. Working files are transient and should be cleaned. Backups are retained until the NEXT successful run so the user can verify and rollback after the session.
 
 ```
-import shutil
+# Retain .tmp/backup/ until NEXT successful run (user can verify and rollback after session)
+# Only delete .tmp/ working files (iteration_*.json, predictions_buffer.json)
+import glob, os
+
 tmp_dir = os.path.join(".neuraltree", ".tmp")
 if os.path.exists(tmp_dir):
-    shutil.rmtree(tmp_dir)
+    # Delete working files
+    for pattern in ["iteration_*.json", "predictions_buffer.json"]:
+        for f in glob.glob(os.path.join(tmp_dir, pattern)):
+            os.remove(f)
+
+# Keep: .neuraltree/.tmp/backup/ (retained for post-session rollback)
+# The NEXT run's backup phase will clean the previous backup before creating new ones.
 ```
 
 ### Step 2: Re-index Viking
@@ -1882,6 +1954,50 @@ if pending_actions:
 
 **Processing the response:**
 
+**CREATE actions:**
+
+When user approves a CREATE action:
+1. Emit: "This file needs new content that doesn't exist in the project yet."
+2. Emit: "Suggested path: {action.path}"
+3. Emit: "Topic needed: {action.reason}"
+4. Emit: "Please provide the content, or type 'skip' to defer."
+5. Wait for user input
+6. If user provides content: write to file with proper frontmatter, wire with neuraltree_wire()
+7. If user types 'skip': mark as deferred, save to next run's pending list
+
+**Inline logic for `execute_pending_action`:**
+
+For each approved pending action, execute based on type:
+
+```
+def execute_pending_action(action, project_root):
+    if action["type"] == "DELETE":
+        # Trace Before Prune (Section 2 rule)
+        trace = neuraltree_trace(target=action["target"], project_root=project_root)
+        if trace["is_alive"]:
+            emit(f"WARNING: {action['target']} still has {len(trace['referenced_by'])} references. Skipping delete.")
+            return  # Do not delete alive files
+        # File is dead — safe to delete
+        os.remove(os.path.join(project_root, action["target"]))
+        emit(f"  Deleted {action['target']}")
+
+    elif action["type"] == "ARCHIVE":
+        archive_dir = os.path.join(project_root, "archive")
+        os.makedirs(archive_dir, exist_ok=True)
+        dest = os.path.join(archive_dir, os.path.basename(action["target"]))
+        shutil.move(os.path.join(project_root, action["target"]), dest)
+        # Update any _INDEX.md that referenced the moved file
+        emit(f"  Archived {action['target']} → archive/{os.path.basename(action['target'])}")
+
+    elif action["type"] == "CREATE":
+        emit(f"CONTENT_GAP: What content should go in {action['target']}? Provide it now or type 'skip'.")
+        user_content = wait_for_user_input()
+        if user_content.strip().lower() == "skip":
+            return  # Deferred to next run
+        write_file(os.path.join(project_root, action["target"]), user_content)
+        emit(f"  Created {action['target']}")
+```
+
 **"all"** — Execute all pending actions, re-score, and emit a final update:
 
 ```
@@ -2071,6 +2187,8 @@ When infrastructure fails mid-run, NeuralTree must recover gracefully — never 
 | Disk full during backup | Abort the backup phase. Release lock. Report: `"Disk full — backup aborted. Free space and retry."` Do not proceed without a backup. |
 | LLM judge returns garbage | Default to NO (conservative — do not apply the change). Log warning: `"LLM judge returned unparseable response — defaulting to HOLD"`. Continue with next iteration. |
 | State file corrupted | Re-initialize state from defaults. Warn: `"State file corrupted — resetting to defaults. Previous calibration data lost."` |
+| calibration.json corrupted | Delete file and restart with defaults (accuracy=0.5). Predictions will be less accurate for 2-3 runs until recalibrated. |
+| queries.json corrupted | Delete file. Next run generates fresh queries from project context. Spot-check filtering unavailable until queries are re-evolved (1-2 full runs). |
 | Network partition (Viking mid-query) | Treat as Viking timeout — retry once, then degrade. Do not hang waiting for reconnection. |
 
 **The cardinal rule of error recovery:** Never leave the lock held. Never leave the project modified without a backup. Never silently swallow an error — always warn the user.
