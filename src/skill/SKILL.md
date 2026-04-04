@@ -691,3 +691,174 @@ Recommendation: Start Viking and re-run for full assessment.
 ```
 
 **Baseline recording in degraded mode:** Same as Step 6, but `precision_at_3` is stored as `null` and `mode_degraded: true` is added to the baseline object.
+
+---
+
+## Section 5: Diagnose Protocol
+
+> Failed queries are symptoms. Gap types are the diagnosis. The priority queue is the treatment plan.
+
+The Diagnose Protocol takes every query that failed the benchmark, classifies WHY it failed, enriches the diagnosis with past lessons, and produces a priority queue ordered by fix cost. This is the bridge between "we know the score" (Section 4) and "we know what to do about it" (Section 6: AutoLoop).
+
+### Step 1: Identify Failed Queries
+
+A query "fails" if it meets either condition:
+
+- **precision_at_3 < 0.67** — fewer than 2 of 3 Viking results were judged relevant by the LLM
+- **The correct file was not in Viking's top 3 at all** — the expected source (from `query["source"]`) does not appear in any of the returned URIs
+
+Collect all failed queries from the benchmark's `baseline.queries` list:
+
+```
+failed_queries = []
+for query in baseline["queries"]:
+    correct_file_found = any(
+        query.get("source", "") in r["uri"]
+        for r in query.get("viking_results", [])
+    )
+    if query.get("precision", 1.0) < 0.67 or not correct_file_found:
+        failed_queries.append(query)
+```
+
+If `failed_queries` is empty, all queries passed — skip to Step 5 (emit healthy message) and proceed to Section 7 (Enforce).
+
+### Step 2: Classify Failures
+
+Call `neuraltree_diagnose` with the failed queries AND their Viking results. This is **integration point #2** from the handoff — the MCP server needs `viking_results` to distinguish EMBEDDING_GAP (content exists but Viking can't find it) from CONTENT_GAP (content doesn't exist at all).
+
+```
+viking_results_for_diagnose = []
+for query in failed_queries:
+    viking_results_for_diagnose.append({
+        "query": query["text"],
+        "results": [r["uri"] for r in query.get("viking_results", [])]
+    })
+
+diagnosis = neuraltree_diagnose(
+    failed_queries=[
+        {"text": q["text"], "expected_topic": q.get("source", "")}
+        for q in failed_queries
+    ],
+    project_root=".",
+    viking_results=viking_results_for_diagnose
+)
+```
+
+The MCP server returns:
+- `diagnoses` — per-query classification with `gap_type` and recommended fix
+- `gap_counts` — tally per gap type (`{"SYNAPSE_GAP": 3, "EMBEDDING_GAP": 2, ...}`)
+- `fix_priority` — server's initial ordering (overridden by Step 4)
+- `total_failures` — count of diagnosed failures
+- `warnings` — any issues during classification
+
+**Gap types returned by `neuraltree_diagnose`:**
+
+| Gap Type | Meaning | Example |
+|----------|---------|---------|
+| `SYNAPSE_GAP` | Files exist and are indexed, but lack `## Related` wiring between them | Query about "build rules" fails because `build_rules.md` doesn't link to `ci_config.md` |
+| `FRESHNESS_GAP` | File exists but `last_verified` is stale (>90 days), degrading its score | Memory file from 6 months ago — content may be accurate but staleness penalizes it |
+| `EMBEDDING_GAP` | File exists on disk but Viking hasn't indexed it, so semantic search misses it | New file added to `memory/` but never run through `openviking add-resource` |
+| `FOCUS_GAP` | File is too large (>80 lines) — Viking indexes it but the relevant section is diluted | A 200-line file where the answer is on line 150 — Viking returns the file but the match quality is low |
+| `CONTENT_GAP` | No file exists that answers this query — new content must be created | Query about a topic that was discussed verbally but never documented |
+
+### Step 3: Enrich with Lessons
+
+Check whether past autoloop sessions encountered similar failures. Lessons from previous runs can inform strategy — a recurring EMBEDDING_GAP on the same directory suggests a systematic indexing issue, not a one-off miss.
+
+```
+symptoms = [d["query"] + " " + d["gap_type"] for d in diagnosis["diagnoses"]]
+
+lesson_matches = neuraltree_lesson_match(
+    symptoms=symptoms,
+    project_root="."
+)
+```
+
+**Enrichment rules:**
+- If a lesson match has `score > 0.5`, attach it to the corresponding diagnosis entry as `prior_lesson`
+- Past lessons **inform** the fix strategy but **do not override** the autoloop's decisions — the autoloop may find a better solution than what worked last time
+- If `lesson_matches["total_matches"] == 0`, no prior lessons exist — this is expected on first run
+
+```
+for i, diag in enumerate(diagnosis["diagnoses"]):
+    matching_lessons = [
+        m for m in lesson_matches.get("matches", [])
+        if m["score"] > 0.5 and m["symptom_index"] == i
+    ]
+    if matching_lessons:
+        diag["prior_lesson"] = matching_lessons[0]  # best match
+```
+
+### Step 4: Build Priority Queue
+
+Sort diagnosed failures by **fix cost**, cheapest first. Cheap fixes are applied first because they have the highest ROI — small effort, immediate score improvement.
+
+**Priority order (cheapest → most expensive):**
+
+| Priority | Gap Type | Fix Cost | What the AutoLoop Does |
+|----------|----------|----------|----------------------|
+| 1 | `SYNAPSE_GAP` | ~5 seconds | Add `## Related` links between existing files. No content creation, no re-indexing. |
+| 2 | `FRESHNESS_GAP` | ~10 seconds | Update `last_verified` date after confirming content is still accurate. |
+| 3 | `EMBEDDING_GAP` | ~30 seconds | Re-index the file in Viking via `openviking add-resource`. File already exists. |
+| 4 | `FOCUS_GAP` | ~2 minutes | Split large file into focused neurons. Requires creating new files + updating references. |
+| 5 | `CONTENT_GAP` | ~5 minutes | Create entirely new content. Most expensive — requires writing, wiring, and indexing. |
+
+```
+PRIORITY_ORDER = {
+    "SYNAPSE_GAP": 1,
+    "FRESHNESS_GAP": 2,
+    "EMBEDDING_GAP": 3,
+    "FOCUS_GAP": 4,
+    "CONTENT_GAP": 5,
+}
+
+priority_queue = sorted(
+    diagnosis["diagnoses"],
+    key=lambda d: PRIORITY_ORDER.get(d["gap_type"], 99)
+)
+```
+
+**Within the same gap type**, sort by the query's precision score (lowest first — worst failures get fixed first):
+
+```
+priority_queue = sorted(
+    diagnosis["diagnoses"],
+    key=lambda d: (PRIORITY_ORDER.get(d["gap_type"], 99), d.get("precision", 0.0))
+)
+```
+
+### Step 5: Emit Diagnosis Summary
+
+Emit a structured status message summarizing the diagnosis results.
+
+**When failures exist:**
+
+```
+gap_counts = diagnosis["gap_counts"]
+emit(
+    f"Phase 3/5: Diagnosed {diagnosis['total_failures']} failures: "
+    f"{gap_counts.get('SYNAPSE_GAP', 0)} SYNAPSE, "
+    f"{gap_counts.get('EMBEDDING_GAP', 0)} EMBEDDING, "
+    f"{gap_counts.get('FRESHNESS_GAP', 0)} FRESHNESS, "
+    f"{gap_counts.get('FOCUS_GAP', 0)} FOCUS, "
+    f"{gap_counts.get('CONTENT_GAP', 0)} CONTENT"
+)
+emit(f"Priority queue: {len(priority_queue)} fixes ordered by cost (cheapest first)")
+```
+
+If lessons were matched:
+```
+lesson_count = sum(1 for d in priority_queue if d.get("prior_lesson"))
+if lesson_count > 0:
+    emit(f"Lessons: {lesson_count} prior lessons matched (informing fix strategy)")
+```
+
+**When no failures exist:**
+
+```
+emit("Phase 3/5: All queries passing. Tree is healthy.")
+```
+
+Skip Sections 5 Step 4 priority queue and proceed directly to **Section 7 (Enforce)** — there are no failures to fix, so the AutoLoop (Section 6) is unnecessary.
+
+**Proceed to Section 6 (AutoLoop) with the `priority_queue`, `diagnosis`, and updated `baseline`.**
