@@ -1108,6 +1108,32 @@ autoloop_state["attempted"].add(dedup_key)
 
 **Why dedup matters:** Without this guard, the loop can waste iterations re-attempting fixes that already failed. A SYNAPSE_GAP between files A and B is the same gap whether it appears in query 1 or query 7 — fix it once, measure once.
 
+#### Step 1b: Early HOLD Routing
+
+Gap types that cannot be auto-fixed are routed directly to HOLD:
+
+```
+if failure["gap_type"] in ("CONTENT_GAP", "FOCUS_GAP"):
+    # These require user judgment — skip predict/backup/execute/measure
+    if failure["gap_type"] == "CONTENT_GAP":
+        autoloop_state["held"].append({
+            "failure": failure,
+            "gap_type": "CONTENT_GAP",
+            "reason": "Content does not exist — user must provide",
+            "suggested_path": failure.get("fix", "TBD")
+        })
+    elif failure["gap_type"] == "FOCUS_GAP":
+        autoloop_state["held"].append({
+            "failure": failure,
+            "gap_type": "FOCUS_GAP",
+            "reason": "FOCUS_GAP splits require user judgment on section boundaries",
+            "suggested_action": f"Split {failure['target_file']} into focused leaves"
+        })
+    continue  # Skip Steps 2-9 entirely
+```
+
+**Why early routing matters:** CONTENT_GAP and FOCUS_GAP both end up in HOLD regardless — they cannot be auto-fixed. Without this guard, they wastefully pass through `neuraltree_predict()` (Step 2) and the backup guard (Step 3) before hitting `continue` in Step 4. Early routing saves one MCP call per non-fixable gap and makes the control flow explicit.
+
 #### Step 2: Predict
 
 Before making any change, ask the prediction engine what it expects will happen. This creates the baseline for the KEEP/HOLD/DISCARD decision in Step 6.
@@ -1119,8 +1145,7 @@ ACTION_MAP = {
     "SYNAPSE_GAP":   "wire",
     "FRESHNESS_GAP": "update_freshness",
     "EMBEDDING_GAP": "index",
-    "FOCUS_GAP":     "split",
-    "CONTENT_GAP":   "wire",  # create file + wire (content provided by user)
+    # FOCUS_GAP and CONTENT_GAP are routed to HOLD in Step 1b — they never reach Step 2
 }
 
 proposed_action = ACTION_MAP[failure["gap_type"]]
@@ -1164,15 +1189,11 @@ if predicted_delta < 0.001:
 
 Before touching any file, create a restorable backup. This is the safety net that makes DISCARD possible.
 
-**Skip backup for gap types that don't modify files in this step.** CONTENT_GAP and FOCUS_GAP both `continue` before any file is written (Step 4), so backing up `None` or a placeholder path would crash. Guard before calling:
+**Note:** CONTENT_GAP and FOCUS_GAP are routed to HOLD in Step 1b and never reach this step. Only SYNAPSE_GAP, FRESHNESS_GAP, and EMBEDDING_GAP need backup handling here.
 
 ```
-# CONTENT_GAP and FOCUS_GAP skip Step 4 via continue — no file is modified, no backup needed
-if failure["gap_type"] in ("CONTENT_GAP", "FOCUS_GAP"):
-    # Will be routed to HOLD in Step 4 without touching any file — skip backup
-    pass
-elif failure.get("target_file") is None:
-    # No target file resolved (e.g. CONTENT_GAP with no matching_files) — skip
+if failure.get("target_file") is None:
+    # No target file resolved — skip backup
     pass
 else:
     backup_result = neuraltree_backup(
@@ -1230,40 +1251,7 @@ viking_add_resource(
 )
 ```
 
-**FOCUS_GAP — Route to HOLD for user review:**
-
-FOCUS_GAP splits are complex operations that require user judgment on section boundaries. The autoloop does NOT auto-split files.
-
-```
-# FOCUS_GAP: Route to HOLD — do not auto-split
-autoloop_state["held"].append({
-    "failure": failure,
-    "gap_type": "FOCUS_GAP",
-    "target": failure["target_file"],
-    "reason": "FOCUS_GAP splits require user judgment on section boundaries",
-    "suggested_action": f"Split {failure['target_file']} into focused leaves"
-})
-continue  # Skip to next failure — do not auto-split
-```
-
-**CONTENT_GAP — Flag as PENDING ACTION:**
-
-Content gaps cannot be auto-fixed because they require new knowledge that doesn't exist in the project yet. The autoloop does NOT auto-generate content — that would produce hallucinated documentation.
-
-```
-emit(f"  CONTENT_GAP: {failure['query']} — requires new content")
-emit(f"  PENDING ACTION: User must provide content for this topic")
-emit(f"  Suggested file: {failure.get('suggested_path', 'TBD')}")
-
-# Record as HOLD — the gap is real but the fix requires human input
-autoloop_state["held"].append({
-    "gap_type": "CONTENT_GAP",
-    "query": failure["query"],
-    "reason": "Content does not exist — user must provide",
-    "suggested_path": failure.get("suggested_path", "TBD")
-})
-continue  # Skip to next failure — no measurement needed
-```
+**FOCUS_GAP and CONTENT_GAP** never reach Step 4 — they are routed to HOLD in Step 1b.
 
 #### Step 5: Measure
 
