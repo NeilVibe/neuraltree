@@ -72,9 +72,15 @@ tools:
 
 ### Step 2: Detect Mode
 
-Read `.neuraltree/state.json` from the project root. This file is Skill-owned — the MCP server does NOT create or manage it. This is **integration point #4** from the handoff.
+Read `.neuraltree/state.json` from the project root. This file is Skill-owned — the MCP server does NOT create or manage it.
 
-**If `.neuraltree/state.json` does not exist** — this is a first run. Mode = `bootstrap`.
+```
+state = {}  # default for first run (no state.json)
+if os.path.exists(".neuraltree/state.json"):
+    state = json.load(open(".neuraltree/state.json"))
+```
+
+**If `.neuraltree/state.json` does not exist** (`state` is empty) — this is a first run. Mode = `bootstrap`.
 
 **If it exists** — parse these fields:
 - `flow_score` (float, 0.0–1.0): last computed Flow Score
@@ -134,6 +140,16 @@ The lock prevents concurrent runs from corrupting state. ALL skill operations th
    ```
 
    If you are an AI agent executing this skill: before you finish your response (whether success or failure), you MUST delete `.neuraltree/.lock`. No exceptions.
+
+**After acquiring lock, initialize timing and project identity:**
+
+```
+# Start timer for duration tracking
+run_start_time = now()
+
+# Derive project name from current directory
+project_name = os.path.basename(os.path.abspath("."))
+```
 
 ### Step 4: Handle Subcommands
 
@@ -664,7 +680,7 @@ baseline = {
     "mode": mode,
     "flow_score": final_flow_score,
     "precision_at_3": precision_at_3,
-    "structural": {
+    "metrics": {
         "hop_efficiency": score_result["metrics"]["hop_efficiency"],
         "synapse_coverage": score_result["metrics"]["synapse_coverage"],
         "dead_neuron_ratio": score_result["metrics"]["dead_neuron_ratio"],
@@ -702,7 +718,12 @@ The Flow Score determines what happens next. Higher scores mean less interventio
 **Routing logic:**
 ```
 if mode == "spot-check" and final_flow_score > 0.90:
-    emit("Flow Score {score} — project is healthy. No intervention needed.")
+    # Emit spot-check short form report (Section 8)
+    days_since = (now() - parse_iso(state["last_run"])).days
+    next_date = (now() + timedelta(days=7)).strftime("%Y-%m-%d")
+    emit(f"NeuralTree spot-check — {project_name}")
+    emit(f"Score: {final_flow_score:.2f} (Excellent) | {len(queries)} queries | 0 failures")
+    emit(f"Last full run: {days_since} days ago | Next: {next_date}")
     release_lock()
     stop()
 elif mode == "spot-check" and final_flow_score <= 0.90:
@@ -731,7 +752,7 @@ When Viking is unavailable (`DEGRADED_MODE = true`), the Benchmark Protocol oper
 Without precision_at_3, the weights must be redistributed across structural metrics only:
 
 ```
-structure_reachability = (hop_efficiency + synapse_coverage) / 2
+structure_reachability = (score_result["metrics"]["hop_efficiency"] + score_result["metrics"]["synapse_coverage"]) / 2
 
 Degraded Flow Score = (
     structure_reachability * 0.45 +
@@ -889,6 +910,10 @@ PRIORITY_ORDER = {
     "CONTENT_GAP": 5,
 }
 
+# Derive target_file from matching_files for all downstream references
+for d in diagnosis["diagnoses"]:
+    d["target_file"] = d["matching_files"][0] if d.get("matching_files") else None
+
 priority_queue = sorted(
     diagnosis["diagnoses"],
     key=lambda d: PRIORITY_ORDER.get(d["gap_type"], 99)
@@ -955,11 +980,21 @@ autoloop_state = {
 }
 latest_metrics = dict(baseline["metrics"])
 current_flow_score = baseline["flow_score"]
+exit_reason = "no_failures"
 ```
 
 Skip Sections 5 Step 4 priority queue and proceed directly to **Section 7 (Enforce)** — there are no failures to fix, so the AutoLoop (Section 6) is unnecessary.
 
-**Proceed to Section 6 (AutoLoop) with the `priority_queue`, `diagnosis`, and updated `baseline`.**
+**Routing after Step 5:**
+
+```
+if len(priority_queue) > 0:
+    # Failures exist — proceed to AutoLoop to fix them
+    Proceed to Section 6 (AutoLoop) with the priority_queue, diagnosis, and updated baseline.
+else:
+    # No failures — already routed to Section 7 above
+    pass
+```
 
 ---
 
@@ -1226,7 +1261,17 @@ new_precision_at_3 = mean(q["precision"] for q in baseline["queries"] if q.get("
 **5d. Assemble new Flow Score:**
 
 ```
-new_flow_score = new_score_result["flow_score_partial"] + (new_precision_at_3 * 0.25)
+if DEGRADED_MODE:
+    # Use degraded formula — no semantic scoring available
+    sr = (new_score_result["metrics"]["hop_efficiency"] + new_score_result["metrics"]["synapse_coverage"]) / 2
+    new_flow_score = min(0.75,
+        sr * 0.45 +
+        new_score_result["metrics"]["dead_neuron_ratio"] * 0.25 +
+        new_score_result["metrics"]["freshness"] * 0.20 +
+        new_score_result["metrics"]["trunk_pressure"] * 0.10
+    )
+else:
+    new_flow_score = new_score_result["flow_score_partial"] + (new_precision_at_3 * 0.25)
 actual_delta = new_flow_score - current_flow_score
 ```
 
@@ -1285,6 +1330,8 @@ The fix failed to deliver meaningful improvement — or made things worse. Roll 
 
 ```
 else:
+    if actual_delta < 0:
+        emit(f"  WARNING: Fix caused regression (score decreased by {abs(actual_delta):.3f}). Rolling back.")
     neuraltree_restore(
         files=[failure["target_file"]],
         project_root="."
@@ -1575,6 +1622,8 @@ from datetime import datetime
 history_dir = os.path.join(".neuraltree", "history")
 os.makedirs(history_dir, exist_ok=True)
 
+elapsed_seconds = int((now() - run_start_time).total_seconds())
+
 history_entry = {
     "date": datetime.now().strftime("%Y-%m-%d"),
     "flow_score_before": autoloop_state["score_history"][0],
@@ -1587,7 +1636,7 @@ history_entry = {
     "fixes": summarize_fixes(autoloop_state["kept"]),  # e.g. ["wire: 2", "index: 1"]
     "exit_reason": exit_reason,
     "calibration_accuracy": read_calibration_accuracy(".neuraltree/calibration.json"),
-    "duration_seconds": int(elapsed_time.total_seconds())
+    "duration_seconds": elapsed_seconds
 }
 
 history_path = os.path.join(history_dir, f"{history_entry['date']}.json")
@@ -1786,7 +1835,7 @@ Emit this report after every `bootstrap`, `critical`, `maintenance`, or `health-
 ```
 ═══════════════════════════════════════════════════
   NeuralTree Report — {project_name}
-  Mode: {mode} | Duration: {duration}
+  Mode: {mode} | Duration: {elapsed_seconds}s
 ═══════════════════════════════════════════════════
 
 Flow Score: {before} → {after} ({delta:+.2f})
@@ -1805,7 +1854,7 @@ Flow Score: {before} → {after} ({delta:+.2f})
 **Metric table assembly:**
 
 ```
-before_metrics = baseline["structural"]
+before_metrics = baseline["metrics"]
 before_metrics["precision_at_3"] = baseline.get("precision_at_3", "N/A")
 
 after_metrics = {
@@ -2007,7 +2056,15 @@ if user_response == "all":
 
     # Re-score after executing pending actions
     new_score = neuraltree_score(project_root=".")
-    new_flow_score = new_score["flow_score_partial"] + (precision_at_3 * 0.25)
+    p3 = latest_metrics.get("precision_at_3") or 0.0
+    if DEGRADED_MODE:
+        sr = (new_score["metrics"]["hop_efficiency"] + new_score["metrics"]["synapse_coverage"]) / 2
+        new_flow_score = min(0.75,
+            sr * 0.45 + new_score["metrics"]["dead_neuron_ratio"] * 0.25 +
+            new_score["metrics"]["freshness"] * 0.20 + new_score["metrics"]["trunk_pressure"] * 0.10
+        )
+    else:
+        new_flow_score = new_score["flow_score_partial"] + (p3 * 0.25)
 
     emit(f"\nPending actions executed. Flow Score: {current_flow_score:.2f} → {new_flow_score:.2f}")
 
@@ -2026,7 +2083,15 @@ elif "," in user_response or user_response.isdigit():
 
     # Re-score and update
     new_score = neuraltree_score(project_root=".")
-    new_flow_score = new_score["flow_score_partial"] + (precision_at_3 * 0.25)
+    p3 = latest_metrics.get("precision_at_3") or 0.0
+    if DEGRADED_MODE:
+        sr = (new_score["metrics"]["hop_efficiency"] + new_score["metrics"]["synapse_coverage"]) / 2
+        new_flow_score = min(0.75,
+            sr * 0.45 + new_score["metrics"]["dead_neuron_ratio"] * 0.25 +
+            new_score["metrics"]["freshness"] * 0.20 + new_score["metrics"]["trunk_pressure"] * 0.10
+        )
+    else:
+        new_flow_score = new_score["flow_score_partial"] + (p3 * 0.25)
     emit(f"\nSelected actions executed. Flow Score: {current_flow_score:.2f} → {new_flow_score:.2f}")
     update_state_and_history(new_flow_score)
 ```
