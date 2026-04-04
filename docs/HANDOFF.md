@@ -1,3 +1,5 @@
+> **STATUS: HISTORICAL** — Phase 2 completed 2026-04-05. This document preserved for reference.
+
 # NeuralTree Handoff — Phase 2 Ready
 
 > **Date:** 2026-04-05

@@ -8,15 +8,15 @@
 
 ## Current Status
 
-**Phase 1 + 1.5 COMPLETE.** MCP server built, tested, security-hardened.
-**Phase 2 NEXT:** Build `src/skill/SKILL.md` — the orchestration brain.
-**Handoff doc:** `docs/HANDOFF.md` has full context for Phase 2.
+**Phases 1-3 COMPLETE.** MCP server + SKILL.md built, tested, reviewed.
+**Phase 4 NEXT:** Hardening — end-to-end testing on real projects.
+**What's done:** 16 MCP tools (194 tests) + 2,350-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed).
 
 ## Architecture
 
 ```
-Skill (SKILL.md) = THE BRAIN — orchestrates everything (Phase 2 — NOT YET BUILT)
-MCP Server (neuraltree-mcp) = THE MUSCLE — 16 tools (BUILT, TESTED, REVIEWED)
+Skill (SKILL.md) = THE BRAIN — 2,350 lines, 9 sections (BUILT, 5 REVIEW ROUNDS)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 16 tools (BUILT, 194 TESTS)
 Viking MCP = THE MEMORY — semantic search (required dependency)
 ```
 
@@ -45,8 +45,8 @@ neuraltree/
 │   │   ├── scoring/             3 modules (score, diagnose, predict+update_calibration)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
-│       └── SKILL.md             The skill instruction file (Phase 2 — NOT YET BUILT)
-├── tests/                       175 tests passing
+│       └── SKILL.md             The skill instruction file (2,350 lines, 9 sections — BUILT)
+├── tests/                       194 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             2 test files (mcp.call_tool() end-to-end)
@@ -76,19 +76,20 @@ neuraltree/
 - **User Approves Destructive Actions:** Autoloop thinks, user decides on deletes/moves.
 - **Sandbox First:** Autoloop runs in isolated git worktree, never touches real project.
 
-## Key Integration Points for Phase 2
+## Integration Points (all wired and verified)
 
 1. `neuraltree_score()` returns `precision_at_3: null` — Skill fills it via Viking + LLM judge
-2. `neuraltree_diagnose()` needs `viking_results` param for EMBEDDING_GAP classification
+2. `neuraltree_diagnose()` receives `viking_results` param for EMBEDDING_GAP classification
 3. `.neuraltree/state.json` is Skill-owned, not MCP-managed
 4. Lesson recording happens after autoloop KEEP/HOLD/DISCARD decisions
 5. Flow Score assembly: `flow_score_partial + (precision_at_3 * 0.25)`
 
-## Specs
+## Specs & Plans
 
 - Full design spec: `docs/specs/2026-04-04-neuraltree-skill-design.md`
 - Lesson feature: `docs/FEATURE_INCIDENT_MEMORY.md`
-- Phase 2 handoff: `docs/HANDOFF.md`
+- Phase 2 handoff: `docs/HANDOFF.md` (historical — Phase 2 complete)
+- Phase 2 plan: `docs/superpowers/plans/2026-04-05-skill-md-phase2.md` (historical — executed)
 
 ## Dependencies
 
@@ -100,7 +101,7 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (175 passing)
+# Run tests (194 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Verify all 16 tools load
