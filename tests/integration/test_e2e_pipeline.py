@@ -202,3 +202,56 @@ class TestBackupRestore:
 
         # Verify file content is UNCHANGED
         assert coding_path.read_text() == original_content
+
+
+class TestScaleLimits:
+    """Scale boundary tests — scan caps, large project scoring, query scaling."""
+
+    def test_scan_caps_at_max_files(self, tmp_project_large):
+        """Scan with max_files=50 should cap at 50 files on a 150-file project."""
+        result = call_tool("neuraltree_scan", {
+            "path": str(tmp_project_large),
+            "max_files": 50,
+        })
+        assert "error" not in result
+        assert result["capped"] is True
+        assert result["total_count"] <= 50
+
+    def test_score_on_large_project(self, tmp_project_large):
+        """Score a 150-file project (mostly .py). Should handle gracefully."""
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project_large),
+        })
+        # Either an error (no .md files) or a valid low score — both acceptable
+        if "error" in result:
+            assert result["flow_score"] == 0.0
+        else:
+            assert "flow_score_partial" in result
+            assert 0.0 <= result["flow_score_partial"] <= 1.0
+
+    def test_query_scaling_formula(self, tmp_project):
+        """Query count scales with indexed_doc_count — more docs = more queries.
+
+        Formula: target = max(20, min(50, indexed_doc_count // 3))
+        Actual count may be below target if project content is limited,
+        but should never EXCEED the target cap.
+        """
+        # Low doc count → target = max(20, min(50, 9//3=3)) = 20
+        result_low = call_tool("neuraltree_generate_queries", {
+            "project_root": str(tmp_project),
+            "claude_md_path": str(tmp_project / "CLAUDE.md"),
+            "indexed_doc_count": 9,
+        })
+        assert "error" not in result_low
+        assert result_low["total"] <= 50  # never exceeds upper cap
+
+        # High doc count → target = max(20, min(50, 150//3=50)) = 50
+        result_high = call_tool("neuraltree_generate_queries", {
+            "project_root": str(tmp_project),
+            "claude_md_path": str(tmp_project / "CLAUDE.md"),
+            "indexed_doc_count": 150,
+        })
+        assert "error" not in result_high
+        assert result_high["total"] <= 50  # hard cap at 50
+        # More indexed docs should produce >= as many queries (or same)
+        assert result_high["total"] >= result_low["total"]
