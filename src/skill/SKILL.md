@@ -24,7 +24,7 @@ When `/neuraltree` is invoked, execute these five steps in order. Do NOT skip st
 
 Both tool backends must be reachable before any work begins.
 
-1. **neuraltree-mcp** — call `neuraltree_scan(project_root=".", include_contents=false)`.
+1. **neuraltree-mcp** — call `neuraltree_scan(path=".", max_files=10000)`.
    - If it returns a file inventory: **PASS**. Record the `total_files` count.
    - If it errors (connection refused, tool not found, timeout): **ABORT**.
      Print: `FATAL: neuraltree-mcp is not available. Install and configure it before running /neuraltree.`
@@ -404,7 +404,7 @@ Complete: Flow Score {before} → {after} ({delta:+.2f})
 - **Every phase boundary gets a message.** No silent transitions.
 - **Include counts and metrics.** "Scanning..." is bad. "Scanning... 847 files found" is good.
 - **Show before/after on changes.** Flow Score deltas, iteration counts, kept/discarded tallies.
-- **Use the `{status}` tag** to classify scores: `CRITICAL` (< 0.60), `DEGRADED` (0.60–0.79), `HEALTHY` (0.80–0.89), `EXCELLENT` (≥ 0.90).
+- **Use the `{status}` tag** to classify scores: `CRITICAL` (< 0.60), `DEGRADED` (0.60–0.74), `HEALTHY` (0.75–0.89), `EXCELLENT` (≥ 0.90).
 - **Shorter modes emit fewer messages.** A `spot-check` emits 2-3 messages. A `bootstrap` emits all of them.
 
 ### Time Estimates
@@ -455,10 +455,11 @@ The Benchmark Protocol generates test queries, searches Viking for answers, judg
 Generate test queries that probe the project's information structure. These queries simulate what an agent would actually ask during a working session.
 
 ```
-scan_result = neuraltree_scan(project_root=".", include_contents=false)
+scan_result = neuraltree_scan(path=".", max_files=10000)
 index_paths = [f for f in scan_result["files"] if f["name"] == "_INDEX.md"]
 
 result = neuraltree_generate_queries(
+    project_root=".",
     claude_md_path="CLAUDE.md",
     memory_md_path="memory/MEMORY.md",
     index_paths=[p["path"] for p in index_paths],
@@ -1195,9 +1196,12 @@ Every KEEP and DISCARD generates a lesson for future autoloop sessions. HOLD doe
 ```
 neuraltree_lesson_add(
     domain=failure["gap_type"].lower(),
-    lesson=f"KEEP: {failure['gap_type']} fix on {failure.get('target_file', 'unknown')} — "
-           f"predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f}). "
-           f"Action: {proposed_action}. Score improved {current_flow_score - actual_delta:.3f} → {current_flow_score:.3f}.",
+    lesson={
+        "symptom": f"{failure['gap_type']} on {failure.get('target_file', 'unknown')}",
+        "root_cause": f"{failure['gap_type']} — predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f})",
+        "fix": f"KEEP: {proposed_action}. Score improved {current_flow_score - actual_delta:.3f} → {current_flow_score:.3f}.",
+        "key_file": failure.get("target_file", "unknown")
+    },
     project_root="."
 )
 ```
@@ -1207,10 +1211,12 @@ neuraltree_lesson_add(
 ```
 neuraltree_lesson_add(
     domain=failure["gap_type"].lower(),
-    lesson=f"DISCARD: {failure['gap_type']} fix on {failure.get('target_file', 'unknown')} — "
-           f"predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f}). "
-           f"Action: {proposed_action}. Fix rolled back. "
-           f"Warning: this target may resist automated {proposed_action} — consider manual intervention.",
+    lesson={
+        "symptom": f"{failure['gap_type']} on {failure.get('target_file', 'unknown')}",
+        "root_cause": f"{failure['gap_type']} — predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f})",
+        "fix": f"DISCARD: {proposed_action}. Fix rolled back. Target may resist automated {proposed_action} — consider manual intervention.",
+        "key_file": failure.get("target_file", "unknown")
+    },
     project_root="."
 )
 ```
@@ -1910,10 +1916,10 @@ When Viking MCP is unreachable (connection refused, timeout, not installed):
 
 | Metric | Normal Weight | Degraded Weight |
 |--------|--------------|-----------------|
-| structure_reachability | 0.25 | 0.45 |
-| query_resolution | 0.25 | 0.25 |
-| freshness | 0.15 | 0.20 |
-| lesson_coverage | 0.10 | 0.10 |
+| structure_reachability | — | 0.45 |
+| dead_neuron_ratio | 0.15 | 0.25 |
+| freshness | 0.10 | 0.20 |
+| trunk_pressure | 0.05 | 0.10 |
 | precision_at_3 | 0.25 | — (skipped) |
 
 5. **Reclassify EMBEDDING_GAP → SYNAPSE_GAP:** Without Viking, embedding gaps cannot be fixed by re-indexing. Reclassify them as SYNAPSE_GAP so the AutoLoop fixes them via wiring (adding `## Related` links, cross-references) instead of attempting Viking operations that will fail.
@@ -1964,7 +1970,7 @@ When the project contains multiple CLAUDE.md files or multiple package.json file
 
 NeuralTree must never run twice on the same project simultaneously. File mutations from two concurrent runs would corrupt the project.
 
-- **Lock check at activation.** Before any work begins (Section 1, Step 1), check for `.neuraltree/neuraltree.lock`. The lock file contains: PID, start timestamp, hostname.
+- **Lock check at activation.** Before any work begins (Section 1, Step 3), check for `.neuraltree/.lock`. The lock file contains: the current ISO 8601 timestamp.
 - **Stale lock (>1 hour):** Auto-remove the lock with a warning: `"Stale lock found (started {timestamp}, PID {pid}). Removing and proceeding."` One hour is generous — no NeuralTree run should take that long.
 - **Active lock:** Abort immediately. `"NeuralTree is already running (PID {pid}, started {timestamp}). Aborting."` Do not attempt to queue or wait.
 - **ALL code paths release lock.** Success, failure, crash, user cancellation — every exit path must release the lock. Use try/finally or equivalent. A leaked lock blocks all future runs until the 1-hour stale timeout.
