@@ -994,7 +994,7 @@ Apply the fix based on the gap type. Each gap type has a specific execution stra
 ```
 wire_result = neuraltree_wire(
     file_path=failure["target_file"],
-    all_leaf_paths=scan_result["files"],
+    all_leaf_paths=[f["path"] for f in scan_result["files"]],
     project_root="."
 )
 
@@ -1400,6 +1400,7 @@ knowledge_files = [f for f in recent_files if is_knowledge_file(f)]
 
 if knowledge_files:
     fresh_result = neuraltree_generate_queries(
+        project_root=".",
         claude_md_path="CLAUDE.md",
         memory_md_path="memory/MEMORY.md",
         index_paths=[f for f in knowledge_files if f.endswith("_INDEX.md")],
