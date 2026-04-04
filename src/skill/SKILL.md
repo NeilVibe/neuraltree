@@ -39,6 +39,10 @@ These are operations the agent performs directly (not MCP tools). When executing
 | `is_knowledge_file(path)` | True if file is `.md` and lives in `memory/`, `docs/`, or has YAML frontmatter. Config files, source code, and binaries return False. |
 | `git_log_modified_files(since)` | Run `git log --name-only --since={since}` and return deduplicated list of modified file paths. |
 | `describe_action(kept_entry)` | Generate a human-readable description of a kept action, e.g. "added ## Related (3 synapses)" or "re-indexed in Viking". |
+| `wait_for_user_input()` | Pause execution and return control to the user. Wait for their response. Return the response as a string. |
+| `release_lock()` | Delete `.neuraltree/.lock`. If it doesn't exist, silently succeed (already released). |
+
+> **Note:** Code blocks in this skill use Python-like pseudocode for clarity. Functions like `os.path.exists()`, `json.load()`, `shutil.rmtree()` indicate the operation to perform, not literal Python imports. Use your platform's equivalent file operations.
 
 ---
 
@@ -141,9 +145,14 @@ The lock prevents concurrent runs from corrupting state. ALL skill operations th
 
    If you are an AI agent executing this skill: before you finish your response (whether success or failure), you MUST delete `.neuraltree/.lock`. No exceptions.
 
-**After acquiring lock, initialize timing and project identity:**
+**After acquiring lock, clean previous run's backup and initialize timing:**
 
 ```
+# Clean previous run's backup (retained for post-session rollback, now safe to delete)
+prev_backup = ".neuraltree/.tmp/backup"
+if os.path.exists(prev_backup):
+    shutil.rmtree(prev_backup)
+
 # Start timer for duration tracking
 run_start_time = now()
 
@@ -165,6 +174,23 @@ If the user invoked `/neuraltree` with a subcommand, route to the specific pipel
 | `/neuraltree` (no subcommand) | Mode-detected pipeline | Uses the mode from Step 2 to determine which pipeline sections to execute. |
 
 **Subcommand overrides mode.** If the user says `/neuraltree audit`, run the audit pipeline even if mode detection says `critical`. The user's explicit intent takes priority.
+
+**`/neuraltree enforce` initialization:** Since `enforce` jumps directly to Section 7, variables that normally accumulate through earlier sections must be initialized from the last run's state:
+
+```
+# For enforce-only: load state from last run, initialize empty autoloop
+if not os.path.exists(".neuraltree/state.json"):
+    emit "Cannot run /neuraltree enforce without a previous run. Run /neuraltree first."
+    release_lock()
+    stop
+state = json.load(open(".neuraltree/state.json"))
+baseline = {"flow_score": state["flow_score"], "metrics": state.get("metrics", {})}
+autoloop_state = {"iteration": 0, "max_iterations": 10, "score_history": [state["flow_score"]], "attempted": set(), "kept": [], "discarded": [], "held": [], "convergence_counter": 0}
+latest_metrics = dict(baseline.get("metrics", {}))
+current_flow_score = state["flow_score"]
+exit_reason = "enforce_only"
+precision_at_3 = state.get("metrics", {}).get("precision_at_3")
+```
 
 **`/neuraltree fix` baseline recovery:** Since `fix` skips benchmarking, the `baseline` object must be reconstructed from the last run:
 
@@ -1332,10 +1358,12 @@ The fix failed to deliver meaningful improvement — or made things worse. Roll 
 else:
     if actual_delta < 0:
         emit(f"  WARNING: Fix caused regression (score decreased by {abs(actual_delta):.3f}). Rolling back.")
-    neuraltree_restore(
+    restore_result = neuraltree_restore(
         files=[failure["target_file"]],
         project_root="."
     )
+    if restore_result.get("not_found"):
+        emit(f"WARNING: Could not restore {failure['target_file']} — backup not found. File may be in modified state.")
     autoloop_state["discarded"].append({
         "gap_type": failure["gap_type"],
         "target": failure.get("target_file", ""),
@@ -1802,10 +1830,13 @@ lock_path = os.path.join(".neuraltree", ".lock")
 if os.path.exists(lock_path):
     os.remove(lock_path)
 
-# 2. Remove .tmp/ (should already be gone from Step 1g, but defensive)
-tmp_dir = os.path.join(".neuraltree", ".tmp")
-if os.path.exists(tmp_dir):
-    shutil.rmtree(tmp_dir)
+# 2. Remove .tmp/ working files ONLY (preserve backup for post-session rollback)
+for f in glob.glob(".neuraltree/.tmp/iteration_*.json"):
+    os.remove(f)
+predictions = os.path.join(".neuraltree", ".tmp", "predictions_buffer.json")
+if os.path.exists(predictions):
+    os.remove(predictions)
+# DO NOT delete .neuraltree/.tmp/backup/ — retained until next run
 
 # 3. Verify state.json was written
 assert os.path.exists(".neuraltree/state.json"), "CRITICAL: state.json not written!"
@@ -1906,36 +1937,13 @@ if autoloop_state["kept"]:
 These are changes the autoloop identified but did NOT execute because they're destructive (deletes, moves, archives). They're gathered from CONTENT_GAP items and any FOCUS_GAP splits that would delete the original file.
 
 ```
+# PENDING ACTIONS come from HOLD items that need user approval
 pending_actions = []
-
-# CONTENT_GAP items need user-provided content
-for h in autoloop_state["held"]:
-    if h["gap_type"] == "CONTENT_GAP":
-        pending_actions.append({
-            "type": "CREATE",
-            "target": h.get("suggested_path", "TBD"),
-            "reason": h.get("query", "missing content"),
-            "trace": "N/A"
-        })
-
-# Any files recommended for deletion by diagnose (0 incoming refs, stale)
-for d in diagnosis.get("diagnoses", []):
-    if d.get("recommended_action") == "delete":
-        pending_actions.append({
-            "type": "DELETE",
-            "target": d.get("target_file", "unknown"),
-            "reason": d.get("reason", "no incoming references"),
-            "trace": f"{d.get('incoming_refs', 0)} refs"
-        })
-
-    if d.get("recommended_action") == "archive":
-        pending_actions.append({
-            "type": "ARCHIVE",
-            "target": d.get("target_file", "unknown"),
-            "destination": f"archive/{os.path.basename(d.get('target_file', 'unknown'))}",
-            "reason": d.get("reason", "stale content"),
-            "trace": f"{d.get('incoming_refs', 0)} refs"
-        })
+for held in autoloop_state["held"]:
+    if held.get("reason", "").startswith("CONTENT_GAP"):
+        pending_actions.append({"type": "CREATE", "target": held.get("suggested_path", "unknown"), "reason": held["reason"]})
+    elif held.get("reason", "").startswith("FOCUS_GAP"):
+        pending_actions.append({"type": "SPLIT", "target": held["failure"]["target_file"], "reason": held["reason"]})
 
 if pending_actions:
     emit("\nPENDING ACTIONS (require approval — destructive):")
