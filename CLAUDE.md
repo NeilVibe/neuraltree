@@ -9,8 +9,9 @@
 ## Current Status
 
 **Phases 1-3 COMPLETE.** MCP server + SKILL.md built, tested, reviewed.
-**Phase 4 NEXT:** Hardening — end-to-end testing on real projects.
-**What's done:** 16 MCP tools (200 tests) + 2,350-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed).
+**Phase 5 COMPLETE.** Ready to install and use.
+**What's built:** 16 MCP tools (200 tests) + 2,350-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed) + install.sh + README.
+**Phase 6 DEFERRED:** Platform adaptation (Gemini CLI, Codex) — not needed to ship.
 
 ## Architecture
 
