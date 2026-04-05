@@ -119,13 +119,22 @@ $PYTHON_CMD -m pip install -r "$REQUIREMENTS" --quiet 2>&1 | tail -5 || fail "pi
 
 ok "Dependencies installed"
 
-# ─── Step 4: Copy SKILL.md to Claude skills directory ────────────────
+# ─── Step 4: Copy skill files to Claude skills directory ─────────────
 info "Installing skill to ${SKILL_DEST_DIR}..."
 
 mkdir -p "$SKILL_DEST_DIR"
 cp "$SKILL_SRC" "$SKILL_DEST"
 
-ok "Skill installed ($(wc -l < "$SKILL_DEST") lines)"
+# Copy section files (skill router reads these on demand)
+SECTIONS_SRC="${SCRIPT_DIR}/src/skill/sections"
+SECTIONS_DEST="${SKILL_DEST_DIR}/sections"
+if [[ -d "$SECTIONS_SRC" ]]; then
+    mkdir -p "$SECTIONS_DEST"
+    cp "$SECTIONS_SRC"/*.md "$SECTIONS_DEST/"
+    ok "Skill installed ($(wc -l < "$SKILL_DEST") lines + $(ls "$SECTIONS_DEST"/*.md | wc -l) section files)"
+else
+    ok "Skill installed ($(wc -l < "$SKILL_DEST") lines, no sections found)"
+fi
 
 # ─── Step 5: Register MCP server in ~/.claude.json ───────────────────
 info "Registering MCP server in ${CLAUDE_JSON}..."

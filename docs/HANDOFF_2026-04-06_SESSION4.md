@@ -1,119 +1,25 @@
-# Session 4 Handoff — 2026-04-06 (UPDATED)
+# Session 4 Handoff — 2026-04-06
 
-## What Was Done
+## What Was Done (4 major changes)
 
-### 1. Project Cleanup (-3,344 lines of dead docs)
-Deleted all completed plans, handoffs, and proof run logs:
-- `docs/superpowers/plans/` (2 files, 1,726 lines)
-- `docs/PHASE1_PLAN.md`, `docs/PHASE1_5_PLAN.md`, `docs/HANDOFF*.md` (5 files, 1,255 lines)
-- `docs/AUTOLOOP_PROOF_RUN.md`, `docs/FEATURE_INCIDENT_MEMORY.md` (232 lines)
-- Empty `tests/mock/` dir, all `__pycache__/`, `.ruff_cache/`, `.pytest_cache/`
+### 1. Project Cleanup (-3,344 lines)
+Deleted all completed plans, handoffs, proof runs, and empty dirs. Project went from 52 files to 35 real files.
 
-### 2. Viking + Qwen3.5 Integration (THE BIG ONE)
+### 2. Viking + Qwen3.5 Integration (2 new MCP tools)
+**Problem:** SKILL.md told Claude to call Viking and Qwen3.5 directly — but Claude had no MCP tools for either. The skill was unexecutable.
 
-**Problem:** SKILL.md told Claude to call `viking_search()` and use Qwen3.5 as LLM judge — but Claude had no MCP tools to reach either service. The skill was unexecutable.
+**Fix:** Two new tools that bring both services inside neuraltree-mcp:
+- `neuraltree_precision(queries, ...)` — searches Viking + judges with Qwen3.5. One call replaces 50+ manual calls.
+- `neuraltree_viking_index(file_paths, ...)` — batch-indexes files into Viking.
 
-**Fix:** Two new MCP tools that bring both services inside neuraltree-mcp:
+3-agent code review applied: ERROR verdict scoring fix, absolute path guard, prompt injection hardening, broader exception handling, 10 new test cases.
 
-- **`neuraltree_precision(queries, ...)`** — takes generated queries, searches Viking for top-3 results per query, reads content, asks Qwen3.5 (via Ollama) for YES/NO relevance judgments, returns `precision_at_3` and per-query results. One call replaces 50+ manual tool calls.
-
-- **`neuraltree_viking_index(file_paths, ...)`** — batch-uploads local files to Viking via temp_upload + register API. Used by Enforce step to re-index modified files.
-
-### 3. Code Review (3 agents, all findings fixed)
-- ERROR verdicts now excluded from precision denominator (was corrupting score)
-- Absolute path injection guard on viking_index
-- XML delimiters in LLM prompt (anti-injection)
-- Empty input / limit=0 / invalid root guards
-- ValueError catch on HTTP JSON parsing
-- 10 additional test cases covering all flagged gaps
-
-### 4. Documentation Updates
-- CLAUDE.md, README.md, install.sh all updated for 24 tools
-- README now lists 3 prerequisites: neuraltree-mcp, Viking, Ollama+Qwen3.5
-- SKILL.md Section 4 Steps 2-3 replaced with `neuraltree_precision` call
-- SKILL.md Section 7 Step 2 replaced with `neuraltree_viking_index` call
-- All `viking_add_resource()` references replaced throughout SKILL.md
-
-## Current State
+### 3. SKILL.md Split (5x context reduction)
+Split 2,204-line monolith into 233-line router + 6 section files:
 
 ```
-24 MCP tools, 316 tests passing
-SKILL.md: 2,204 lines, 9 sections — ALL tool calls now go through neuraltree-mcp
-```
-
-### Tool Availability Audit (EVERY tool the skill references)
-
-All 24 MCP tools: ✓ available via neuraltree-mcp
-All 13 helper functions: ✓ Claude's native capabilities (Read, Write, Edit, Bash, ask user)
-External service calls in SKILL.md: 0 (was 2 — Viking + Ollama now handled internally)
-
-## What's Next — Testing on a Real Project
-
-The skill has NEVER been tested end-to-end by actually invoking `/neuraltree` on a real project. All testing so far has been:
-- Unit tests (316 passing, mocked)
-- Manual pipeline runs via Python scripts
-- Live Viking + Qwen3.5 API calls confirmed working
-
-### To Test on NewFin (or any project):
-
-1. Ensure neuraltree-mcp is registered in `~/.claude.json`
-2. Ensure Viking is running (`~/.openviking/start_viking.sh`)
-3. Ensure Ollama is running with Qwen3.5 (`ollama serve` + model pulled)
-4. `cd` to the target project
-5. Run `/neuraltree`
-
-### What to Watch For:
-
-1. **Does SKILL.md load as a skill?** — the frontmatter needs to be recognized by Claude Code
-2. **Does Section 1 activation work?** — scan + precision health check
-3. **Does Section 4 benchmark complete?** — queries + precision + structural score
-4. **Does Section 5 diagnose produce useful gap classifications?**
-5. **Does Section 6 AutoLoop actually improve the score?** — the Karpathy loop: propose → backup → execute → measure → keep/discard
-6. **Does Section 7 enforce persist everything?** — state.json, queries.json, history/, Viking re-index
-7. **Does Section 8 report look right?** — metric table, action lists, interactive pending actions
-
-### Known Gaps / Risks:
-
-- **Skill loading:** SKILL.md is 2,204 lines — heavy context load. If Claude truncates it, later sections may be lost.
-- **Viking content:** Viking needs to have the target project indexed FIRST for precision_at_3 to be meaningful. On bootstrap, everything will be EMBEDDING_GAP. The enforce step should index everything afterward.
-- **Sandbox on non-git repos:** `neuraltree_sandbox_create` uses git worktrees. Falls back to rsync if no git — but that fallback path is less tested.
-- **`neuraltree_predict`** is built and tested but NOT used anywhere in SKILL.md (the AutoLoop uses score-based keep/discard instead of predictions). Consider wiring it in or removing it.
-- **`neuraltree_shrink_and_wire`** and **`neuraltree_split_and_wire`** are built but NOT referenced in SKILL.md — the skill uses `neuraltree_plan_split` + manual execution instead. Could simplify Section 8 SPLIT handling.
-
-## Files Changed This Session
-
-```
-NEW:
-  src/neuraltree_mcp/tools/precision.py      — Viking search + LLM judge tool
-  src/neuraltree_mcp/tools/viking_index.py   — batch Viking indexing tool
-  tests/unit/test_precision.py               — 26 tests
-  tests/unit/test_viking_index.py            — 20 tests
-  docs/HANDOFF_2026-04-06_SESSION4.md        — this file
-
-MODIFIED:
-  src/neuraltree_mcp/server.py               — registers 2 new tools (24 total)
-  src/skill/SKILL.md                         — replaced Viking/Ollama sections with MCP calls
-  tests/integration/test_server.py           — tool count 22→24
-  requirements.txt                           — added requests
-  CLAUDE.md                                  — updated counts, deps, structure
-  README.md                                  — updated counts, prereqs, architecture
-  install.sh                                 — updated tool count check
-
-DELETED:
-  docs/superpowers/plans/* (2 files)
-  docs/PHASE1_PLAN.md, PHASE1_5_PLAN.md
-  docs/HANDOFF*.md (3 files)
-  docs/AUTOLOOP_PROOF_RUN.md
-  docs/FEATURE_INCIDENT_MEMORY.md
-```
-
-### 4. SKILL.md Split (5x context reduction)
-
-Split the 2,204-line SKILL.md into a compact router + 6 section files:
-
-```
-src/skill/
-├── SKILL.md              (233 lines) — activation, principles, pipeline routing
+~/.claude/skills/neuraltree/
+├── SKILL.md              (233 lines) — activation, principles, routing
 ├── sections/
 │   ├── benchmark.md      (131 lines) — queries + precision + score
 │   ├── diagnose.md       (127 lines) — classify failures + priority queue
@@ -123,26 +29,74 @@ src/skill/
 │   └── edge-cases.md     (70 lines)  — error recovery + bootstrap
 ```
 
-Claude loads ~400 lines per phase instead of 2,204. Section files are read on demand at each phase boundary.
+Claude loads ~400 lines per phase instead of 2,204.
 
-## Commits
+### 4. Install Script Fixed
+`install.sh` now copies section files alongside SKILL.md. Tool count check updated to 24.
 
-1. `4711749` — `feat: Viking+Qwen integration — neuraltree_precision + neuraltree_viking_index`
-2. `613302a` — `docs: session 4 handoff`
-3. `e9e8fd1` — `refactor: split SKILL.md into compact router + 6 section files`
-
-## Final State
+## Current State
 
 ```
 24 MCP tools, 316 tests passing
-SKILL.md: 233-line router + 6 section files (1,014 lines total)
-Context per phase: ~400 lines (was 2,204)
+Skill: 233-line router + 6 section files (1,014 lines total)
+Installed globally: ~/.claude/skills/neuraltree/ (skill) + ~/.claude.json (MCP server)
 ```
 
-## To Test on NewFin
+## What Was Verified
+- Skill loads via `/neuraltree` — confirmed (appears in skill list)
+- All 24 MCP tools load — confirmed
+- Section files copied to install dir — confirmed
+- Viking API reachable — confirmed (localhost:1933)
+- Ollama + Qwen3.5 reachable — confirmed (localhost:11434, qwen3.5:4b)
+- Full pipeline (scan → queries → precision → score → diagnose) — confirmed via manual Python run
+- 316 tests passing — confirmed
 
-1. Ensure neuraltree-mcp registered in `~/.claude.json`
-2. Viking running (`~/.openviking/start_viking.sh`)
-3. Ollama running with Qwen3.5 (`ollama serve`)
-4. `cd ~/newfin` (or any project)
-5. `/neuraltree`
+## What Was NOT Done
+- **Live `/neuraltree` invocation** — MCP server was registered mid-session, needs restart to load tools. Next session will be the first real end-to-end test.
+
+## Immediate Next Step
+
+**Restart Claude Code, then run `/neuraltree` on the neuraltree project itself (self-review).**
+
+```
+cd ~/neuraltree
+/neuraltree
+```
+
+This will test:
+1. Skill loads and routes to section files correctly
+2. All 24 MCP tools are callable
+3. Benchmark produces Flow Score
+4. Diagnose classifies gaps
+5. AutoLoop proposes and measures fixes
+6. Enforce persists state and re-indexes Viking
+7. Report outputs results
+
+## Known Issues to Watch
+
+1. **First run = low score** — Viking has limited neuraltree content indexed. Bootstrap mode expected. Enforce step will index everything for subsequent runs.
+
+2. **Section file paths** — SKILL.md says `sections/benchmark.md`. Claude needs to resolve this relative to the skill's install dir (`~/.claude/skills/neuraltree/sections/`). If Claude can't find them, it'll need the absolute path.
+
+3. **Unused tools** — `neuraltree_predict`, `neuraltree_shrink_and_wire`, `neuraltree_split_and_wire` are built and tested but NOT referenced in SKILL.md. The autoloop uses score-based keep/discard instead of predictions, and manual split logic instead of atomic tools. Could simplify later.
+
+4. **CLAUDE.md is 107 lines** — over the 100-line trunk pressure threshold. Will flag as TRUNK_PRESSURE gap.
+
+## Commits This Session
+
+```
+4711749 feat: Viking+Qwen integration — neuraltree_precision + neuraltree_viking_index
+613302a docs: session 4 handoff
+e9e8fd1 refactor: split SKILL.md into compact router + 6 section files
+039e07e docs: update session 4 handoff with skill split details
+```
+
+## Prerequisites Checklist (for next session)
+
+- [x] neuraltree-mcp registered in `~/.claude.json`
+- [x] Skill installed at `~/.claude/skills/neuraltree/` (with sections/)
+- [x] `install.sh` copies sections
+- [ ] Viking running (`~/.openviking/start_viking.sh`)
+- [ ] Ollama running with Qwen3.5 (`ollama serve`)
+- [ ] **Restart Claude Code** (loads MCP server)
+- [ ] Run `/neuraltree` on neuraltree itself
