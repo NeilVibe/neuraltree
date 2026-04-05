@@ -1079,52 +1079,62 @@ else:
 
 ## Section 6: Karpathy AutoLoop
 
-> Predict. Backup. Execute. Measure. Decide. Learn. Repeat until the tree is healthy or you've proven it can't be improved further.
+> Analyze. Propose. Execute. Measure. Decide. Learn. Repeat.
 
-Inspired by Karpathy's autoresearch methodology. The key insight: the unit of measurement is the **strategy**, not the individual file. Wiring one file out of 436 moves the score by 0.001 — noise. Wiring all orphans at once moves it by 0.15 — signal. Each iteration applies a coherent strategy, measures the full result, and KEEPS or DISCARDS the entire strategy.
+Inspired by Karpathy's autoresearch: each iteration, Claude analyzes the project state, proposes an action, executes it, and measures the result. The score decides — KEEP or DISCARD. No hardcoded strategy list. Claude reads the files, understands the context, and decides what to do.
 
-**Critical:** Claude is the brain in this loop. MCP tools measure (score, predict, backup). Claude thinks (reads files, understands content, decides how to split, what to wire, which files belong together). The tools propose, Claude refines, the score judges.
+**The loop:** Claude is the brain. MCP tools are the measurement layer. Claude proposes, tools measure, numbers decide.
 
-### Strategy Queue
+### How It Works
 
-The AutoLoop operates on strategies, ordered by expected impact:
+Each iteration:
+1. **Analyze** — Claude reads the diagnosis, the scores, the actual files. Understands what's wrong.
+2. **Propose** — Claude decides ONE coherent action. Not from a fixed list — from understanding the project. Examples: "shrink CLAUDE.md by extracting the build commands section", "wire the 5 analysis docs that all discuss trading strategies", "this 900-line doc is 40% duplicate of ROADMAP — deduplicate and merge."
+3. **Backup** — Snapshot the current state.
+4. **Execute** — Claude performs the action (using MCP tools as helpers where useful).
+5. **Measure** — `neuraltree_score()` gives the new Flow Score.
+6. **Decide** — KEEP if score improved, DISCARD if it didn't (restore from backup).
+7. **Learn** — Record what worked/failed via `neuraltree_lesson_add()` and `neuraltree_update_calibration()`.
+8. **Repeat** — Propose the next action informed by what worked.
 
-| Priority | Strategy | What Claude Does | Metrics Affected |
-|----------|----------|-----------------|-----------------|
-| 1 | `SPLIT_LARGE` | Read each >500-line file, understand its topics, split into focused files with proper frontmatter + naming. Merge related sections, don't split mechanically. | trunk_pressure, hop_efficiency |
-| 2 | `WIRE_ORPHANS` | For each file with 0 inbound refs, read content, find related files, add `## Related` links. Wire in batches. | synapse_coverage, dead_neuron_ratio |
-| 3 | `INDEX_DIRS` | Generate `_INDEX.md` for every directory containing .md files. | hop_efficiency |
-| 4 | `FRESHNESS` | Review files, update `last_verified` on ones that are still accurate. | freshness |
-| 5 | `VIKING_INDEX` | Index all .md files in Viking for semantic search. Requires Viking MCP running. | precision_at_3 |
-| 6 | `RE_WIRE` | Second pass after splits created new files. Wire the new files + re-wire neighbors. | synapse_coverage |
+### What Claude Should Consider For Each File
+
+When analyzing a large or problematic file, Claude should READ it and ask:
+
+- **Is this file useful?** Does it contain information someone would search for? Or is it stale/outdated?
+- **Is it a duplicate?** Does another file cover the same topic? → Merge, don't split.
+- **Is it too large?** Can it be shrunk by removing redundant content? Or does it genuinely need splitting?
+- **Should it be split or shrunk?** Splitting creates new files (risk: more orphans). Shrinking keeps file count stable.
+- **Is it a sacred file?** Some files must stay as-is (SKILL.md is 2,400 lines for a reason — it's a complete instruction set, not a doc to reorganize).
+- **What's the wiring situation?** Before splitting, plan how the new files will be linked. Split + wire = one action.
+- **Would Viking indexing help more than restructuring?** Sometimes the content is fine, it just needs to be searchable.
 
 ### Exit Conditions
 
-Check after **every strategy iteration**. The loop terminates when ANY condition is met:
-
-1. **Healthy:** `flow_score > 0.85` — the tree is healthy enough.
-2. **Converged:** 2 consecutive strategies where `|delta| < 0.02` — changes aren't moving the needle.
-3. **Hard cap:** 6 strategy iterations per round, 3 rounds max.
-4. **Exhausted:** All strategies have been attempted or skipped.
+1. **Healthy:** `flow_score > 0.85` — the tree is healthy.
+2. **Converged:** 2 consecutive iterations where `|delta| < 0.01` — nothing is improving.
+3. **Hard cap:** 8 iterations — prevent runaway loops.
+4. **Clean bill:** Claude reads the diagnosis and determines no further action would help.
 
 ### Sandbox Mode
 
 **Mandatory for:** bootstrap and critical mode (flow_score < 0.60).
-**Optional for:** health-check, maintenance, spot-check.
+**Optional for:** health-check, maintenance.
 
-For bootstrap/critical:
-1. `neuraltree_sandbox_create()` → isolated copy
-2. Run all strategies on the sandbox
-3. `neuraltree_sandbox_diff()` → review changes
-4. User approves → `neuraltree_sandbox_apply()`
-5. `neuraltree_sandbox_destroy()` → cleanup
+```
+if mode in ("bootstrap", "critical"):
+    sandbox = neuraltree_sandbox_create(project_root=".")
+    sandbox_root = sandbox["sandbox_path"]
+else:
+    sandbox_root = "."
+```
 
 ### Initialize
 
 ```
 autoloop_state = {
     "iteration": 0,
-    "max_iterations": 5,
+    "max_iterations": 8,
     "score_history": [baseline["flow_score"]],
     "kept": [],
     "discarded": [],
@@ -1135,37 +1145,169 @@ autoloop_state = {
 latest_metrics = dict(baseline["metrics"])
 current_flow_score = baseline["flow_score"]
 
-# Sandbox for high-risk modes
-if mode in ("bootstrap", "critical"):
-    sandbox = neuraltree_sandbox_create(project_root=".")
-    sandbox_root = sandbox["sandbox_path"]
-    emit(f"Sandbox created at {sandbox_root}")
-else:
-    sandbox_root = "."
-
-# Build strategy queue from diagnosis gap counts
-strategy_queue = []
-gap_counts = diagnosis["gap_counts"]
-
-if gap_counts.get("FOCUS_GAP", 0) > 0 or latest_metrics["trunk_pressure"] < 0.8:
-    strategy_queue.append("SPLIT_LARGE")
-if gap_counts.get("SYNAPSE_GAP", 0) > 0 or latest_metrics["synapse_coverage"] < 0.5:
-    strategy_queue.append("WIRE_ORPHANS")
-if latest_metrics["hop_efficiency"] < 0.5:
-    strategy_queue.append("INDEX_DIRS")
-if latest_metrics["freshness"] < 0.5:
-    strategy_queue.append("FRESHNESS")
-# VIKING_INDEX after structural fixes, before re-wire
-if not DEGRADED_MODE and (latest_metrics.get("precision_at_3") is None or latest_metrics.get("precision_at_3", 0) < 0.5):
-    strategy_queue.append("VIKING_INDEX")
-# RE_WIRE always last — catches new connections from splits + indexing
-if "SPLIT_LARGE" in strategy_queue or "VIKING_INDEX" in strategy_queue:
-    strategy_queue.append("RE_WIRE")
+# Route CONTENT_GAP to HOLD — user must provide content
+for d in diagnosis["diagnoses"]:
+    if d["gap_type"] == "CONTENT_GAP":
+        autoloop_state["held"].append({
+            "failure": d,
+            "gap_type": "CONTENT_GAP",
+            "reason": "Content does not exist — user must provide",
+            "suggested_path": d.get("fix", "TBD")
+        })
 ```
 
-### Per-Strategy Steps
+### Per-Iteration Steps
 
-For each strategy in `strategy_queue`, execute these steps. Each strategy is atomic — KEEP the whole thing or DISCARD the whole thing.
+Each iteration, Claude performs ALL of these steps in order.
+
+#### Step 1: Analyze and Propose
+
+Claude reads the current state and proposes ONE action. This is the creative step — no hardcoded logic.
+
+```
+# Claude has access to:
+# - latest_metrics (what's weak)
+# - diagnosis["diagnoses"] (what failed and why)
+# - autoloop_state["kept"] / ["discarded"] (what worked/failed before)
+# - scan_result["files"] (full file list)
+# - The actual file contents (Claude can read any file)
+
+# Claude THINKS and proposes an action:
+# Example proposals (Claude generates these, not a script):
+#
+# "The 3 analysis docs (QUANT_ANALYSIS, QUARTERLY_ANALYSIS, QUALITY_CONTROL)
+#  overlap significantly. I'll merge duplicate sections and cross-link them.
+#  This should improve synapse_coverage and reduce dead content."
+#
+# "CLAUDE.md is 120 lines (trunk_pressure=0.3). The 'Build Commands' and
+#  'Project Structure' sections are reference material. I'll extract them
+#  to docs/BUILD.md and docs/STRUCTURE.md, replacing with links. This
+#  shrinks the trunk without creating orphans."
+#
+# "40% of .md files have zero ## Related links. I'll read each one, find
+#  topically related files, and add ## Related sections. Batch operation."
+#
+# "Viking is available. I'll index all 436 .md files for semantic search.
+#  This directly improves precision_at_3 (25% of Flow Score)."
+
+proposed_action = {
+    "description": "...",    # What Claude plans to do
+    "files_affected": [...], # Which files will be modified
+    "expected_impact": "...", # Which metrics should improve and why
+}
+
+emit(f"Iteration {autoloop_state['iteration']+1}: {proposed_action['description']}")
+```
+
+#### Step 2: Backup
+
+```
+neuraltree_backup(files=proposed_action["files_affected"], project_root=sandbox_root)
+```
+
+#### Step 3: Execute
+
+Claude performs the proposed action. Uses MCP tools as helpers:
+- `neuraltree_wire()` for generating `## Related` suggestions
+- `neuraltree_plan_split()` for mechanical split proposals (Claude reviews and refines)
+- `neuraltree_plan_move()` for safe file moves with reference updates
+- `neuraltree_generate_index()` for directory indexes
+- `neuraltree_find_dead()` for identifying orphans
+- `viking_add_resource()` for Viking indexing (if not DEGRADED_MODE)
+
+**Key rule:** Every file Claude creates or modifies must be wired into the tree. No orphan creation. If you split a file into 3 pieces, wire all 3 with `## Related` before measuring.
+
+#### Step 4: Measure
+
+```
+new_score = neuraltree_score(project_root=sandbox_root)
+new_flow = new_score["flow_score_partial"]
+
+# If Viking available, also measure precision_at_3
+if not DEGRADED_MODE:
+    # Re-run Viking search + LLM judge on affected queries
+    new_precision = ...  # Section 4 Step 2-3 methodology
+    new_flow = new_score["flow_score_partial"] + (new_precision * 0.25)
+
+actual_delta = new_flow - current_flow_score
+emit(f"  Score: {current_flow_score:.3f} → {new_flow:.3f} ({actual_delta:+.3f})")
+```
+
+#### Step 5: Decide — KEEP or DISCARD
+
+```
+if actual_delta > 0:
+    # KEEP — the action improved the score
+    current_flow_score = new_flow
+    latest_metrics = new_score["metrics"]
+    autoloop_state["kept"].append({
+        "strategy": proposed_action["description"],
+        "actual_delta": actual_delta,
+        "files_changed": proposed_action["files_affected"],
+        "new_files": [...],    # if any files were created
+        "wired_files": [...],  # if any files were wired
+    })
+    emit(f"  KEEP — {proposed_action['description']}")
+else:
+    # DISCARD — restore from backup
+    neuraltree_restore(files=proposed_action["files_affected"], project_root=sandbox_root)
+    autoloop_state["discarded"].append({
+        "strategy": proposed_action["description"],
+        "actual_delta": actual_delta,
+    })
+    emit(f"  DISCARD — {proposed_action['description']} (delta {actual_delta:+.3f})")
+```
+
+#### Step 6: Learn
+
+```
+# Calibrate predictions (always write to real project, not sandbox)
+neuraltree_update_calibration(
+    predicted_delta=0.0,  # Claude doesn't use predict tool — score is the judge
+    actual_delta=actual_delta,
+    project_root="."
+)
+
+# Record lesson
+neuraltree_lesson_add(
+    domain="autoloop",
+    lesson={
+        "symptom": proposed_action["description"],
+        "root_cause": f"delta {actual_delta:+.3f}",
+        "fix": f"{'KEEP' if actual_delta > 0 else 'DISCARD'}",
+        "key_file": proposed_action["files_affected"][0] if proposed_action["files_affected"] else "batch"
+    },
+    project_root="."
+)
+```
+
+#### Step 7: Check Exit Conditions
+
+```
+autoloop_state["iteration"] += 1
+autoloop_state["score_history"].append(current_flow_score)
+
+if len(autoloop_state["score_history"]) >= 2:
+    delta = abs(autoloop_state["score_history"][-1] - autoloop_state["score_history"][-2])
+    if delta < 0.01:
+        autoloop_state["convergence_counter"] += 1
+    else:
+        autoloop_state["convergence_counter"] = 0
+
+exit_reason = None
+if current_flow_score > 0.85:
+    exit_reason = "Healthy"
+elif autoloop_state["convergence_counter"] >= 2:
+    exit_reason = "Converged"
+elif autoloop_state["iteration"] >= autoloop_state["max_iterations"]:
+    exit_reason = "Hard cap"
+
+if exit_reason:
+    emit(f"AutoLoop exit: {exit_reason}")
+    break
+
+# Otherwise: go back to Step 1 — Claude analyzes the new state and proposes the next action
+```
 
 #### Step 1: Predict
 
