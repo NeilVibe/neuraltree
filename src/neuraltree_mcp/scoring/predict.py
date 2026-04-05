@@ -98,9 +98,12 @@ def register(mcp: FastMCP) -> None:
             impact: dict = {"action": action, "target": target, "metric_deltas": {}}
 
             if action == "wire":
-                # Adding ## Related/## Docs increases synapse coverage
+                # Adding ## Related/## Docs increases synapse coverage.
+                # Delta is proportional to remaining headroom — wiring the last
+                # unwired file gives a smaller delta than wiring the first.
                 current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
-                delta = 0.05  # each wire adds ~5% (depends on total files)
+                headroom = 1.0 - current_syn
+                delta = headroom * 0.05  # ~5% of remaining gap per wire
                 predicted["synapse_coverage"] = min(1.0, current_syn + delta)
                 impact["metric_deltas"]["synapse_coverage"] = delta
                 # Note: wire adds outbound links FROM target, not inbound links TO target.
@@ -110,9 +113,9 @@ def register(mcp: FastMCP) -> None:
             elif action == "index":
                 # Re-indexing in Viking improves precision_at_3 (not simulatable,
                 # but we estimate a small delta for prediction purposes).
-                # Note: precision_at_3 is marked non-simulatable because the real
-                # improvement requires actual Viking re-index + LLM judge.
-                delta = 0.06
+                current_p3 = predicted.get("precision_at_3") or 0.0
+                headroom = 1.0 - current_p3
+                delta = headroom * 0.06  # ~6% of remaining gap
                 impact["metric_deltas"]["precision_at_3"] = delta
                 # Don't update predicted["precision_at_3"] — it's non-simulatable.
                 # The delta is tracked for calibration comparison only.
@@ -120,27 +123,31 @@ def register(mcp: FastMCP) -> None:
             elif action == "generate_index":
                 # Creating _INDEX.md files improves hop efficiency (navigation)
                 current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                delta = 0.08
+                headroom = 1.0 - current_hop
+                delta = headroom * 0.08  # ~8% of remaining gap
                 predicted["hop_efficiency"] = min(1.0, current_hop + delta)
                 impact["metric_deltas"]["hop_efficiency"] = delta
 
             elif action == "split":
-                # Splitting a large file doesn't directly improve metrics
-                # but may help hop efficiency and synapse coverage
+                # Splitting a large file improves hop efficiency and synapse coverage
                 current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                predicted["hop_efficiency"] = min(1.0, current_hop + 0.03)
-                impact["metric_deltas"]["hop_efficiency"] = 0.03
+                hop_headroom = 1.0 - current_hop
+                delta = hop_headroom * 0.03
+                predicted["hop_efficiency"] = min(1.0, current_hop + delta)
+                impact["metric_deltas"]["hop_efficiency"] = delta
 
             elif action == "update_freshness":
                 current_fresh = predicted.get("freshness", 0.0) or 0.0
-                delta = 0.04
+                headroom = 1.0 - current_fresh
+                delta = headroom * 0.04  # ~4% of remaining gap
                 predicted["freshness"] = min(1.0, current_fresh + delta)
                 impact["metric_deltas"]["freshness"] = delta
 
             elif action == "archive" or action == "delete":
                 # Removing dead files improves dead_neuron_ratio
                 current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
-                delta = 0.05
+                headroom = 1.0 - current_dead
+                delta = headroom * 0.05  # ~5% of remaining gap
                 predicted["dead_neuron_ratio"] = min(1.0, current_dead + delta)
                 impact["metric_deltas"]["dead_neuron_ratio"] = delta
 

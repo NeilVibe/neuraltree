@@ -4,6 +4,7 @@ Extracted from tools/wire.py to be shared by wire, diagnose, score, scan, trace,
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 from pathlib import Path
@@ -69,11 +70,23 @@ def extract_backtick_paths(content: str) -> list[str]:
     return [m.group(1) for m in BACKTICK_PATH_RE.finditer(content)]
 
 
+@functools.lru_cache(maxsize=2048)
+def _compile_ref_patterns(basename: str, rel_path: str) -> tuple:
+    """Compile and cache word-boundary patterns for a file reference."""
+    p1 = re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(basename) + r'(?![a-zA-Z0-9_])')
+    p2 = (
+        re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(rel_path) + r'(?![a-zA-Z0-9_])')
+        if rel_path != basename else None
+    )
+    return (p1, p2)
+
+
 def is_referenced(basename: str, rel_path: str, content: str) -> bool:
     """Check if a file is referenced in content using word-boundary matching.
 
     Prevents false positives like auth.md matching oauth.md. Used by both
     score.py (orphan detection) and reorganize.py (find_dead).
+    Patterns are LRU-cached to avoid re-compilation in tight loops.
 
     Args:
         basename: The filename to search for (e.g. "auth.md").
@@ -83,14 +96,11 @@ def is_referenced(basename: str, rel_path: str, content: str) -> bool:
     Returns:
         True if basename or rel_path appears with word boundaries in content.
     """
-    # Word-boundary pattern prevents substring false positives
-    pattern = re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(basename) + r'(?![a-zA-Z0-9_])')
-    if pattern.search(content):
+    p1, p2 = _compile_ref_patterns(basename, rel_path)
+    if p1.search(content):
         return True
-    if rel_path != basename:
-        path_pattern = re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(rel_path) + r'(?![a-zA-Z0-9_])')
-        if path_pattern.search(content):
-            return True
+    if p2 is not None and p2.search(content):
+        return True
     return False
 
 

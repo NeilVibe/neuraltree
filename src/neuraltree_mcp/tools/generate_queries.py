@@ -259,7 +259,13 @@ def register(mcp: FastMCP) -> None:
                     warnings.append(f"Invalid index path {p}: {e}")
         else:
             try:
-                idx_files = list(root.rglob("_INDEX.md"))
+                # Use walk_project_files (respects SKIP_DIRS) instead of rglob
+                # which would descend into node_modules, .git, .venv, etc.
+                from neuraltree_mcp.text_utils import walk_project_files
+                idx_files = [
+                    f for f in walk_project_files(root, {".md"})
+                    if f.name == "_INDEX.md"
+                ]
             except OSError as e:
                 warnings.append(f"Could not scan for _INDEX.md files: {e}")
                 idx_files = []

@@ -20,7 +20,9 @@ GAP_TYPES = {
     "FOCUS_GAP": "Answer buried in 500+ line file (needs splitting)",
 }
 
-_TEXT_EXTENSIONS = {".md", ".py", ".js", ".ts", ".yml", ".yaml", ".json", ".txt", ".sh"}
+# Only search documentation files for gap classification.
+# Source code (.py, .js, etc.) produces noise — generic words match everything.
+_TEXT_EXTENSIONS = {".md", ".txt"}
 _STALE_DAYS = 30
 
 

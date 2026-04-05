@@ -245,11 +245,16 @@ def register(mcp: FastMCP) -> None:
         for rel in targets:
             src = sandbox / rel
             dst = root / rel
-            # Path traversal guard
+            # Path traversal guard — validate BOTH source and destination
+            try:
+                validate_within_root(src, sandbox)
+            except ValueError:
+                errors.append(f"{rel}: source path traversal blocked (escapes sandbox)")
+                continue
             try:
                 validate_within_root(dst, root)
             except ValueError:
-                errors.append(f"{rel}: path traversal blocked")
+                errors.append(f"{rel}: path traversal blocked (escapes project root)")
                 continue
             if not src.exists():
                 errors.append(f"{rel}: not found in sandbox")

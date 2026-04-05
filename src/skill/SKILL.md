@@ -1491,10 +1491,12 @@ else:
 After every decision, feed the prediction/actual pair back to the calibration system. This makes future predictions more accurate.
 
 ```
+# Calibration ALWAYS writes to the real project root (not sandbox).
+# If written to sandbox, calibration data is lost when sandbox is destroyed.
 neuraltree_update_calibration(
     predicted_delta=predicted_delta,
     actual_delta=actual_delta,
-    project_root=sandbox_root
+    project_root="."
 )
 ```
 
@@ -1515,7 +1517,7 @@ neuraltree_lesson_add(
         "fix": f"KEEP: {proposed_action}. Score improved {current_flow_score - actual_delta:.3f} → {current_flow_score:.3f}.",
         "key_file": failure.get("target_file", "unknown")
     },
-    project_root=sandbox_root
+    project_root="."  # Lessons ALWAYS write to real project (not sandbox — destroyed after loop)
 )
 ```
 
@@ -1530,7 +1532,7 @@ neuraltree_lesson_add(
         "fix": f"DISCARD: {proposed_action}. Fix rolled back. Target may resist automated {proposed_action} — consider manual intervention.",
         "key_file": failure.get("target_file", "unknown")
     },
-    project_root=sandbox_root
+    project_root="."  # Lessons ALWAYS write to real project (not sandbox — destroyed after loop)
 )
 ```
 
@@ -2325,7 +2327,21 @@ def execute_pending_action(action, project_root):
         if user_content.strip().lower() == "skip":
             return  # Deferred to next run
         write_file(os.path.join(project_root, action["target"]), user_content)
-        emit(f"  Created {action['target']}")
+
+        # Wire the new file with ## Related links to make it discoverable
+        wire_result = neuraltree_wire(
+            file_path=action["target"],
+            all_leaf_paths=scan_result["files"],
+            project_root=project_root
+        )
+        if wire_result.get("suggested_content"):
+            apply_suggested_content(action["target"], wire_result["suggested_content"])
+
+        # Index in Viking so semantic search finds it
+        if not DEGRADED_MODE:
+            viking_add_resource(uri=action["target"], content=user_content)
+
+        emit(f"  Created {action['target']} (wired + indexed)")
 ```
 
 **"all"** — Execute all pending actions, re-score, and emit a final update:
