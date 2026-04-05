@@ -156,23 +156,21 @@ def register(mcp: FastMCP) -> None:
                 impact["metric_deltas"]["dead_neuron_ratio"] = dead_delta
 
             elif action == "wire_orphans":
-                # Batch wire all orphan files. Big impact on synapse + dead ratio.
+                # Batch wire all orphan files. Improves synapse coverage.
+                # Note: wiring adds outbound links FROM target, NOT inbound TO target.
+                # Dead neuron ratio measures inbound refs, so wiring does NOT improve it.
                 current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
                 syn_delta = (1.0 - current_syn) * 0.30
                 predicted["synapse_coverage"] = min(1.0, current_syn + syn_delta)
                 impact["metric_deltas"]["synapse_coverage"] = syn_delta
 
-                current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
-                dead_delta = (1.0 - current_dead) * 0.15
-                predicted["dead_neuron_ratio"] = min(1.0, current_dead + dead_delta)
-                impact["metric_deltas"]["dead_neuron_ratio"] = dead_delta
-
             elif action == "index_dirs":
-                # Generate indexes for all directories. Improves hop efficiency.
-                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                hop_delta = (1.0 - current_hop) * 0.20
-                predicted["hop_efficiency"] = min(1.0, current_hop + hop_delta)
-                impact["metric_deltas"]["hop_efficiency"] = hop_delta
+                # Generate indexes for all directories.
+                # WARNING: New indexes increase total_md (denominator) without adding
+                # reachability unless trunk links to them. Can DECREASE hop_efficiency.
+                # Predict 0 delta — let the measure step decide if it actually helped.
+                impact["metric_deltas"]["hop_efficiency"] = 0.0
+                impact["warnings"] = ["index_dirs may decrease hop_efficiency if trunk doesn't link to new indexes"]
 
             elif action == "re_wire":
                 # Re-wire after splits. Moderate impact on synapse.

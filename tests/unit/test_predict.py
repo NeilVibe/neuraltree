@@ -89,3 +89,60 @@ class TestPredictLogic:
             "trunk_pressure": 0.05,
         }
         assert abs(sum(weights.values()) - 1.0) < 0.001
+
+
+class TestStrategyActions:
+    """Test strategy-level prediction actions via mcp.call_tool."""
+
+    BASE_METRICS = {
+        "hop_efficiency": 0.3,
+        "synapse_coverage": 0.4,
+        "dead_neuron_ratio": 0.5,
+        "trunk_pressure": 0.2,
+        "freshness": 0.6,
+        "precision_at_3": 0.1,
+    }
+
+    def _predict(self, action, tmp_project):
+        import asyncio
+        from neuraltree_mcp.server import mcp
+        result = asyncio.run(mcp.call_tool("neuraltree_predict", {
+            "current_metrics": self.BASE_METRICS,
+            "proposed_changes": [{"action": action, "target": "batch"}],
+            "project_root": str(tmp_project),
+        }))
+        return json.loads(result.content[0].text)
+
+    def test_split_large_improves_trunk_and_hop(self, tmp_project):
+        data = self._predict("split_large", tmp_project)
+        deltas = data["change_impacts"][0]["metric_deltas"]
+        assert deltas["trunk_pressure"] > 0
+        assert deltas["hop_efficiency"] > 0
+        assert data["predicted_delta"] > 0
+
+    def test_wire_orphans_improves_synapse_only(self, tmp_project):
+        data = self._predict("wire_orphans", tmp_project)
+        deltas = data["change_impacts"][0]["metric_deltas"]
+        assert deltas["synapse_coverage"] > 0
+        assert "dead_neuron_ratio" not in deltas  # wiring is outbound only
+
+    def test_index_dirs_predicts_zero(self, tmp_project):
+        data = self._predict("index_dirs", tmp_project)
+        deltas = data["change_impacts"][0]["metric_deltas"]
+        assert deltas.get("hop_efficiency", 0) == 0.0  # conservative prediction
+
+    def test_viking_index_tracks_precision(self, tmp_project):
+        data = self._predict("viking_index", tmp_project)
+        deltas = data["change_impacts"][0]["metric_deltas"]
+        assert deltas["precision_at_3"] > 0
+        assert deltas["hop_efficiency"] > 0
+
+    def test_re_wire_improves_synapse(self, tmp_project):
+        data = self._predict("re_wire", tmp_project)
+        deltas = data["change_impacts"][0]["metric_deltas"]
+        assert deltas["synapse_coverage"] > 0
+
+    def test_freshness_strategy(self, tmp_project):
+        data = self._predict("freshness", tmp_project)
+        deltas = data["change_impacts"][0]["metric_deltas"]
+        assert deltas["freshness"] > 0

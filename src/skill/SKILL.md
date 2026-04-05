@@ -1462,444 +1462,21 @@ if exit_reason:
     break
 ```
 
-#### Step 1: Dedup Guard
+### CONTENT_GAP Routing
 
-Before attempting any fix, check whether this exact (gap_type, target) combination has already been tried. This prevents wasting iterations on the same failure when the fix didn't work or the failure is a duplicate.
-
-```
-# Default — overwritten in Step 3
-backed_up_files = []
-
-dedup_key = (failure["gap_type"], failure.get("target_file", failure.get("query", "")))
-
-if dedup_key in autoloop_state["attempted"]:
-    # Already tried this exact fix — skip to next failure in queue
-    continue
-
-autoloop_state["attempted"].add(dedup_key)
-```
-
-**Why dedup matters:** Without this guard, the loop can waste iterations re-attempting fixes that already failed. A SYNAPSE_GAP between files A and B is the same gap whether it appears in query 1 or query 7 — fix it once, measure once.
-
-#### Step 1b: Early HOLD Routing
-
-Gap types that cannot be auto-fixed are routed directly to HOLD:
+Before the strategy loop begins, route CONTENT_GAP diagnoses directly to HOLD. These require user-provided content and cannot be auto-fixed by any strategy:
 
 ```
-if failure["gap_type"] == "CONTENT_GAP":
-    # Content doesn't exist — user must provide. Skip predict/backup/execute/measure.
-    autoloop_state["held"].append({
-        "failure": failure,
-        "gap_type": "CONTENT_GAP",
-        "reason": "Content does not exist — user must provide",
-        "suggested_path": failure.get("fix", "TBD")
-    })
-    continue  # Skip Steps 2-9 entirely
-
-elif failure["gap_type"] == "FOCUS_GAP":
-    # Use neuraltree_plan_split to generate a concrete split proposal
-    split_plan = neuraltree_plan_split(
-        target=failure["target_file"],
-        project_root=sandbox_root,
-        max_lines=500
-    )
-    if split_plan.get("needs_split") and split_plan.get("splits"):
+for d in diagnosis["diagnoses"]:
+    if d["gap_type"] == "CONTENT_GAP":
         autoloop_state["held"].append({
-            "failure": failure,
-            "gap_type": "FOCUS_GAP",
-            "reason": f"File is {split_plan['total_lines']} lines with {split_plan['section_count']} sections — split proposed",
-            "target": failure["target_file"],
-            "split_plan": split_plan["splits"],
-            "index_file": split_plan.get("index_file"),
-            "suggested_action": f"Split {failure['target_file']} into {len(split_plan['splits'])} focused leaves"
+            "failure": d,
+            "gap_type": "CONTENT_GAP",
+            "reason": "Content does not exist — user must provide",
+            "suggested_path": d.get("fix", "TBD")
         })
-    else:
-        autoloop_state["held"].append({
-            "failure": failure,
-            "gap_type": "FOCUS_GAP",
-            "reason": split_plan.get("message", "No ## headings found — manual split needed"),
-            "target": failure["target_file"],
-            "suggested_action": f"Manually split {failure['target_file']} into focused leaves"
-        })
-    continue  # Skip Steps 2-9 entirely
 ```
 
-**Why early routing matters:** CONTENT_GAP cannot be auto-fixed (user must provide content). FOCUS_GAP uses `neuraltree_plan_split()` to generate a concrete split proposal with filenames, line ranges, and section counts — but the actual split execution requires user approval because it's destructive (replaces one file with many). Early routing saves MCP calls and makes the control flow explicit.
-
-#### Step 2: Predict
-
-Before making any change, ask the prediction engine what it expects will happen. This creates the baseline for the KEEP/HOLD/DISCARD decision in Step 6.
-
-Map the gap type to the proposed action:
-
-```
-ACTION_MAP = {
-    "SYNAPSE_GAP":   "wire",
-    "FRESHNESS_GAP": "update_freshness",
-    "EMBEDDING_GAP": "index",
-    # FOCUS_GAP and CONTENT_GAP are routed to HOLD in Step 1b — they never reach Step 2
-}
-
-proposed_action = ACTION_MAP[failure["gap_type"]]
-```
-
-Call the prediction tool:
-
-```
-prediction = neuraltree_predict(
-    current_metrics={
-        "flow_score": current_flow_score,
-        "hop_efficiency": latest_metrics["hop_efficiency"],
-        "synapse_coverage": latest_metrics["synapse_coverage"],
-        "dead_neuron_ratio": latest_metrics["dead_neuron_ratio"],
-        "freshness": latest_metrics["freshness"],
-        "trunk_pressure": latest_metrics["trunk_pressure"],
-        "precision_at_3": latest_metrics.get("precision_at_3")
-    },
-    proposed_changes=[{
-        "action": proposed_action,
-        "target": failure.get("target_file", failure.get("query", "")),
-        "gap_type": failure["gap_type"]
-    }],
-    project_root=sandbox_root
-)
-
-predicted_delta = prediction["predicted_delta"]
-```
-
-Emit: `Phase 4/5: AutoLoop iteration {n}/10 — predicting impact of {proposed_action} on {target}...`
-
-**If `predicted_delta < 0.001`:** The prediction engine expects no measurable improvement. Log and skip to the next failure:
-
-```
-if predicted_delta < 0.001:
-    emit(f"  Predicted delta {predicted_delta:.4f} — too small, skipping")
-    continue
-```
-
-#### Step 3: Backup
-
-Before touching any file, create a restorable backup. This is the safety net that makes DISCARD possible.
-
-**Note:** CONTENT_GAP and FOCUS_GAP are routed to HOLD in Step 1b and never reach this step. Only SYNAPSE_GAP, FRESHNESS_GAP, and EMBEDDING_GAP need backup handling here.
-
-**Important for SYNAPSE_GAP:** `neuraltree_wire()` modifies not just the target file but also its neighbors — it adds `## Related` links back to them. The backup must cover ALL files that will be modified.
-
-```
-if failure.get("target_file") is None:
-    # No target file resolved — skip backup
-    pass
-elif failure["gap_type"] == "SYNAPSE_GAP":
-    # READ-ONLY preview — neuraltree_wire() returns suggestions without modifying any files
-    # We call it here to identify which neighbor files will be affected, so we can back them up
-    wire_preview = neuraltree_wire(
-        file_path=failure["target_file"],
-        all_leaf_paths=scan_result["files"],
-        project_root=sandbox_root
-    )
-    backed_up_files = [failure["target_file"]] + [r["file"] for r in wire_preview.get("related", [])]
-    backup_result = neuraltree_backup(
-        files=backed_up_files,
-        project_root=sandbox_root
-    )
-else:
-    backed_up_files = [failure["target_file"]]
-    backup_result = neuraltree_backup(
-        files=backed_up_files,
-        project_root=sandbox_root
-    )
-```
-
-**Important:** The backup captures the exact file state before the fix. If the fix makes things worse, Step 6 can restore to this exact state. Without backup, DISCARD would be impossible and every change would be permanent. For SYNAPSE_GAP, this includes neighbor files that will gain `## Related` links.
-
-#### Step 4: Execute the Fix
-
-Apply the fix based on the gap type. Each gap type has a specific execution strategy:
-
-**SYNAPSE_GAP — Wire missing `## Related` links:**
-
-```
-wire_result = neuraltree_wire(
-    file_path=failure["target_file"],
-    all_leaf_paths=scan_result["files"],
-    project_root=sandbox_root
-)
-
-# Apply the suggested wiring content
-# neuraltree_wire() returns suggested_content with ## Related links
-# Write the updated content to the file
-apply_suggested_content(failure["target_file"], wire_result["suggested_content"])
-```
-
-**FRESHNESS_GAP — Update `last_verified` in frontmatter:**
-
-```
-# Read the file, parse frontmatter, update last_verified to today
-update_frontmatter(failure["target_file"], {"last_verified": today_iso8601()})
-```
-
-Only update `last_verified` if the content has been verified as still accurate. The autoloop confirms accuracy by checking:
-- The file's `## Related` links are not dead
-- The file's `## Docs` references still exist
-- The content doesn't contradict current project state (checked via Viking search)
-
-If verification fails, skip this fix and flag for manual review.
-
-**EMBEDDING_GAP — Add to Viking index:**
-
-```
-# In DEGRADED_MODE, EMBEDDING_GAP was reclassified to SYNAPSE_GAP in Section 5.
-# This block should not be reached in DEGRADED_MODE. Guard defensively:
-if DEGRADED_MODE:
-    continue  # Skip — Viking unavailable, cannot re-index
-
-viking_add_resource(
-    uri=failure["target_file"],
-    content=read_file(failure["target_file"])
-)
-```
-
-**FOCUS_GAP and CONTENT_GAP** never reach Step 4 — they are routed to HOLD in Step 1b.
-
-#### Step 5: Measure
-
-After applying the fix, re-measure everything. No assumptions about improvement — prove it with numbers.
-
-**5a. Re-run structural scoring:**
-
-```
-new_score_result = neuraltree_score(project_root=sandbox_root)
-```
-
-**5b. Re-run Viking search for affected queries:**
-
-```
-# In DEGRADED_MODE, skip Viking re-search. Re-score using structural metrics only.
-if not DEGRADED_MODE:
-    affected_queries = [
-        q for q in baseline["queries"]
-        if failure["target_file"] in q.get("source", "")
-        or failure["target_file"] in str(q.get("viking_results", []))
-    ]
-
-    for query in affected_queries:
-        viking_result = viking_search(query=query["text"], limit=3)
-        # Read full content — search abstracts are often empty (same as Section 4 Step 2)
-        for result in viking_result["results"]:
-            full_content = viking_read(uri=result["uri"])
-            result["content"] = full_content[:2000]
-        query["viking_results"] = viking_result["results"]
-        # Re-run LLM judge on new results
-        query["precision"] = llm_judge_precision(query)
-```
-
-**5c. Recompute precision_at_3:**
-
-```
-if DEGRADED_MODE:
-    new_precision_at_3 = None
-else:
-    values = [q["precision"] for q in baseline["queries"] if q.get("precision") is not None]
-    new_precision_at_3 = mean(values) if values else 0.0  # fallback for empty
-```
-
-**5d. Assemble new Flow Score:**
-
-```
-if DEGRADED_MODE:
-    # Use degraded formula — no semantic scoring available
-    sr = (new_score_result["metrics"]["hop_efficiency"] + new_score_result["metrics"]["synapse_coverage"]) / 2
-    new_flow_score = min(0.75,
-        sr * 0.45 +
-        new_score_result["metrics"]["dead_neuron_ratio"] * 0.25 +
-        new_score_result["metrics"]["freshness"] * 0.20 +
-        new_score_result["metrics"]["trunk_pressure"] * 0.10
-    )
-else:
-    new_flow_score = new_score_result["flow_score_partial"] + (new_precision_at_3 * 0.25)
-actual_delta = new_flow_score - current_flow_score
-```
-
-Emit: `Phase 4/5: AutoLoop iteration {n}/10 — Flow Score {current_flow_score:.3f} → {new_flow_score:.3f} ({actual_delta:+.3f})`
-
-#### Step 6: Decide — KEEP / HOLD / DISCARD
-
-Compare the actual improvement against the prediction. The ratio determines the decision:
-
-```
-ratio = actual_delta / max(abs(predicted_delta), 0.001)
-```
-
-**KEEP** — `ratio >= 0.8`:
-
-The fix delivered at least 80% of the predicted improvement. Commit the change.
-
-```
-if ratio >= 0.8:
-    current_flow_score = new_flow_score
-    latest_metrics = new_score_result["metrics"]
-    latest_metrics["precision_at_3"] = new_precision_at_3
-    autoloop_state["kept"].append({
-        "gap_type": failure["gap_type"],
-        "target": failure.get("target_file", ""),
-        "predicted_delta": predicted_delta,
-        "actual_delta": actual_delta,
-        "ratio": ratio
-    })
-    emit(f"  KEEP — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f})")
-```
-
-**HOLD** — `0.5 <= ratio < 0.8`:
-
-The fix helped but underperformed predictions. Keep the change in place but flag it for user review.
-
-```
-elif 0.5 <= ratio < 0.8:
-    current_flow_score = new_flow_score
-    latest_metrics = new_score_result["metrics"]
-    latest_metrics["precision_at_3"] = new_precision_at_3
-    autoloop_state["held"].append({
-        "gap_type": failure["gap_type"],
-        "target": failure.get("target_file", ""),
-        "predicted_delta": predicted_delta,
-        "actual_delta": actual_delta,
-        "ratio": ratio,
-        "reason": "Underperformed prediction — review recommended"
-    })
-    emit(f"  HOLD — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f})")
-```
-
-**DISCARD** — `ratio < 0.5`:
-
-The fix failed to deliver meaningful improvement — or made things worse. Roll back to the backup.
-
-```
-else:
-    if actual_delta < 0:
-        emit(f"  WARNING: Fix caused regression (score decreased by {abs(actual_delta):.3f}). Rolling back.")
-    # Restore ALL files that were backed up this iteration (target + neighbors for SYNAPSE_GAP)
-    restore_result = neuraltree_restore(
-        files=backed_up_files,
-        project_root=sandbox_root
-    )
-    if restore_result.get("not_found"):
-        emit(f"WARNING: Could not restore some files: {restore_result['not_found']}. Files may be in modified state.")
-    autoloop_state["discarded"].append({
-        "gap_type": failure["gap_type"],
-        "target": failure.get("target_file", ""),
-        "predicted_delta": predicted_delta,
-        "actual_delta": actual_delta,
-        "ratio": ratio
-    })
-    emit(f"  DISCARD — ratio {ratio:.2f} (predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f}), restored {len(backed_up_files)} file(s) from backup")
-```
-
-#### Step 7: Update Calibration
-
-After every decision, feed the prediction/actual pair back to the calibration system. This makes future predictions more accurate.
-
-```
-# Calibration ALWAYS writes to the real project root (not sandbox).
-# If written to sandbox, calibration data is lost when sandbox is destroyed.
-neuraltree_update_calibration(
-    predicted_delta=predicted_delta,
-    actual_delta=actual_delta,
-    project_root="."
-)
-```
-
-The calibration system tracks prediction accuracy over time. Early predictions may be wildly off — that's expected. By iteration 5-6, the system should be calibrating within 20% of actual results. If calibration accuracy remains below 50% after 10+ runs across sessions, the prediction model needs retraining (recorded as a lesson).
-
-#### Step 8: Record Lesson
-
-Every KEEP and DISCARD generates a lesson for future autoloop sessions. HOLD does not generate a lesson — the outcome is ambiguous.
-
-**On KEEP — record what worked:**
-
-```
-neuraltree_lesson_add(
-    domain=failure["gap_type"].lower(),
-    lesson={
-        "symptom": f"{failure['gap_type']} on {failure.get('target_file', 'unknown')}",
-        "root_cause": f"{failure['gap_type']} — predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f})",
-        "fix": f"KEEP: {proposed_action}. Score improved {current_flow_score - actual_delta:.3f} → {current_flow_score:.3f}.",
-        "key_file": failure.get("target_file", "unknown")
-    },
-    project_root="."  # Lessons ALWAYS write to real project (not sandbox — destroyed after loop)
-)
-```
-
-**On DISCARD — record what didn't work:**
-
-```
-neuraltree_lesson_add(
-    domain=failure["gap_type"].lower(),
-    lesson={
-        "symptom": f"{failure['gap_type']} on {failure.get('target_file', 'unknown')}",
-        "root_cause": f"{failure['gap_type']} — predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f} (ratio {ratio:.2f})",
-        "fix": f"DISCARD: {proposed_action}. Fix rolled back. Target may resist automated {proposed_action} — consider manual intervention.",
-        "key_file": failure.get("target_file", "unknown")
-    },
-    project_root="."  # Lessons ALWAYS write to real project (not sandbox — destroyed after loop)
-)
-```
-
-Lessons are recorded after autoloop KEEP/HOLD/DISCARD decisions. Future runs use `neuraltree_lesson_match()` (Section 5, Step 3) to check whether a similar fix has been tried before and what happened.
-
-#### Step 9: Check Exit Conditions
-
-After every iteration, check all four exit conditions. The order matters — check the most desirable outcome first.
-
-```
-autoloop_state["iteration"] += 1
-autoloop_state["score_history"].append(current_flow_score)
-
-# --- Convergence detection ---
-if len(autoloop_state["score_history"]) >= 2:
-    delta = abs(autoloop_state["score_history"][-1] - autoloop_state["score_history"][-2])
-    if delta < 0.02:
-        autoloop_state["convergence_counter"] += 1
-    else:
-        autoloop_state["convergence_counter"] = 0
-
-# --- Oscillation detection ---
-# Check for alternating up/down/up pattern in last 4 scores
-oscillating = False
-if len(autoloop_state["score_history"]) >= 4:
-    recent = autoloop_state["score_history"][-4:]
-    deltas = [recent[i+1] - recent[i] for i in range(3)]
-    # Oscillation: signs alternate (positive, negative, positive or vice versa)
-    if (deltas[0] > 0 and deltas[1] < 0 and deltas[2] > 0) or \
-       (deltas[0] < 0 and deltas[1] > 0 and deltas[2] < 0):
-        oscillating = True
-
-# --- Check exit conditions ---
-exit_reason = None
-
-# 1. Healthy
-if current_flow_score > 0.85:
-    exit_reason = f"Flow Score {current_flow_score:.3f} > 0.85 — tree is healthy"
-
-# 2. Converged (includes oscillation damping)
-elif autoloop_state["convergence_counter"] >= 3:
-    exit_reason = f"Converged — 3 consecutive iterations with |delta| < 0.02"
-elif oscillating:
-    exit_reason = f"Oscillation detected — score alternating without net improvement"
-
-# 3. Hard cap
-elif autoloop_state["iteration"] >= autoloop_state["max_iterations"]:
-    exit_reason = f"Hard cap — {autoloop_state['max_iterations']} iterations reached"
-
-# 4. Exhausted
-elif all(
-    (d["gap_type"], d.get("target_file", d.get("query", ""))) in autoloop_state["attempted"]
-    for d in priority_queue
-):
-    exit_reason = f"Exhausted — all {len(priority_queue)} failures addressed or skipped"
-
-if exit_reason:
-    break  # Exit the autoloop
-```
 
 ### AutoLoop Summary
 
@@ -1999,7 +1576,7 @@ for query in baseline["queries"]:
     # Queries that caught real issues → promote to critical
     # These queries found failures that led to KEEP or HOLD decisions
     matching_kept = any(
-        k["target"] in query.get("source", "")
+        k.get("strategy", "") in query.get("source", "")
         for k in autoloop_state["kept"]
     )
     matching_held = any(
@@ -2181,21 +1758,19 @@ Every file that was modified, created, or wired during the AutoLoop needs to be 
 ```
 modified_files = set()
 
-# Files modified by KEEP actions
+# Collect all files changed by kept strategies
 for k in autoloop_state["kept"]:
-    modified_files.add(k["target"])
+    strategy = k.get("strategy", "")
 
-# Files created by FOCUS_GAP splits (new leaves)
-for k in autoloop_state["kept"]:
-    if k["gap_type"] == "FOCUS_GAP":
-        # The split created new files — they need indexing too
+    # Each strategy tracks which files it touched
+    if strategy == "SPLIT_LARGE":
         modified_files.update(k.get("new_files", []))
-
-# Files wired (## Related links added)
-for k in autoloop_state["kept"]:
-    if k["gap_type"] == "SYNAPSE_GAP":
-        # Wire adds ## Related to the target AND its newly-linked neighbors
-        modified_files.update(k.get("linked_files", []))
+    elif strategy in ("WIRE_ORPHANS", "RE_WIRE"):
+        modified_files.update(k.get("wired_files", []))
+    elif strategy == "INDEX_DIRS":
+        modified_files.update(k.get("index_files", []))
+    elif strategy == "VIKING_INDEX":
+        pass  # Already indexed in Viking during execution
 
 emit(f"Phase 5/5: Re-indexing {len(modified_files)} files in Viking...")
 
@@ -2219,17 +1794,19 @@ After splits, moves, and wiring, directory contents may have changed. Use `neura
 # Collect directories that had files added, removed, or split
 affected_dirs = set()
 
+# Collect affected directories from kept strategies
 for k in autoloop_state["kept"]:
-    target_dir = os.path.dirname(k["target"])
-    if target_dir:
-        affected_dirs.add(target_dir)
+    for f in k.get("new_files", []) + k.get("wired_files", []) + k.get("index_files", []):
+        d = os.path.dirname(f)
+        if d:
+            affected_dirs.add(d)
 
 # Also check HELD FOCUS_GAP splits that were executed via pending actions
 for h in autoloop_state["held"]:
     if h.get("gap_type") == "FOCUS_GAP" and h.get("target"):
-        target_dir = os.path.dirname(h["target"])
-        if target_dir:
-            affected_dirs.add(target_dir)
+        d = os.path.dirname(h["target"])
+        if d:
+            affected_dirs.add(d)
 
 for dir_path in affected_dirs:
     if os.path.isdir(os.path.join(sandbox_root, dir_path)):
