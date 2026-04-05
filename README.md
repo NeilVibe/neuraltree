@@ -17,7 +17,7 @@ NeuralTree transforms any project into a structured information system where any
 ├──────────────────────┬──────────────────────────────┤
 │  neuraltree-mcp      │  Viking MCP (OpenViking)     │
 │  THE MUSCLE          │  THE MEMORY                  │
-│  21 tools — scan,    │  Semantic search across      │
+│  22 tools — scan,    │  Semantic search across      │
 │  trace, score, wire, │  all indexed content.        │
 │  diagnose, predict,  │  Embedding-powered recall    │
 │  sandbox, backup,    │  that catches what grep      │
@@ -68,7 +68,7 @@ That's it. NeuralTree detects it's a first run (bootstrap mode), scans your proj
 
 ## MCP Tools (20)
 
-NeuralTree's MCP server provides 21 tools across 6 categories:
+NeuralTree's MCP server provides 22 tools across 6 categories:
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -83,6 +83,7 @@ NeuralTree's MCP server provides 21 tools across 6 categories:
 | | `neuraltree_find_dead` | Find orphan files that nothing references |
 | | `neuraltree_generate_index` | Auto-generate `_INDEX.md` for any directory |
 | | `neuraltree_shrink_and_wire` | Atomic: extract sections + wire back-links + generate index |
+| | `neuraltree_split_and_wire` | Atomic: split by headings + wire all pieces + replace with index |
 | **Lessons** | `neuraltree_lesson_match` | Find past lessons matching a current situation |
 | | `neuraltree_lesson_add` | Record a new lesson from an autoloop decision |
 | **Scoring** | `neuraltree_score` | Compute structural metrics (5 of 6 — precision needs Viking) |
@@ -257,7 +258,7 @@ PYTHONPATH=src python3.11 -m neuraltree_mcp.server
 neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
-│   │   ├── server.py            Entry point — registers all 21 tools
+│   │   ├── server.py            Entry point — registers all 22 tools
 │   │   ├── validation.py        Path traversal prevention
 │   │   ├── text_utils.py        Shared utilities
 │   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson, reorganize

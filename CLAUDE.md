@@ -18,7 +18,7 @@
 
 ```
 Skill (SKILL.md) = THE BRAIN — 2,500 lines, 9 sections (BUILT, 5 REVIEW ROUNDS)
-MCP Server (neuraltree-mcp) = THE MUSCLE — 21 tools (BUILT, 256 TESTS)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 22 tools (BUILT, 256 TESTS)
 Viking MCP = THE MEMORY — semantic search (required dependency)
 ```
 
@@ -28,7 +28,7 @@ Viking MCP = THE MEMORY — semantic search (required dependency)
 |----------|-------|
 | Filesystem | scan, trace, backup, restore |
 | Intelligence | wire, generate_queries |
-| Reorganize | plan_move, plan_split, find_dead, generate_index, shrink_and_wire |
+| Reorganize | plan_move, plan_split, find_dead, generate_index, shrink_and_wire, split_and_wire |
 | Lessons | lesson_match, lesson_add |
 | Scoring | score, diagnose, predict, update_calibration |
 | Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
@@ -41,7 +41,7 @@ neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
 │   │   ├── __init__.py          Version 0.1.0
-│   │   ├── server.py            Entry point — registers all 21 tools
+│   │   ├── server.py            Entry point — registers all 22 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
 │   │   ├── tools/               7 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize)
@@ -107,7 +107,7 @@ neuraltree/
 # Run tests (256 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
-# Verify all 21 tools load
+# Verify all 22 tools load
 PYTHONPATH=src python3.11 -c "
 import asyncio
 from neuraltree_mcp.server import mcp

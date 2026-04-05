@@ -27,6 +27,7 @@ class TestServerLoads:
             "neuraltree_find_dead",
             "neuraltree_generate_index",
             "neuraltree_shrink_and_wire",
+            "neuraltree_split_and_wire",
             "neuraltree_lesson_match",
             "neuraltree_lesson_add",
             "neuraltree_score",
@@ -48,7 +49,7 @@ class TestServerLoads:
         """Should have exactly 20 tools."""
         from neuraltree_mcp.server import mcp
         tools = asyncio.run(mcp.list_tools())
-        assert len(tools) == 21
+        assert len(tools) == 22
 
 
 class TestToolSchemas:
