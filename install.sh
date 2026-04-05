@@ -191,10 +191,10 @@ tools = asyncio.run(mcp.list_tools())
 print(len(tools))
 " 2>/dev/null || echo "0")
 
-if [[ "$TOOL_COUNT" -eq 20 ]]; then
-    ok "All 20 MCP tools loaded successfully"
+if [[ "$TOOL_COUNT" -eq 24 ]]; then
+    ok "All 24 MCP tools loaded successfully"
 else
-    warn "Expected 20 tools but got ${TOOL_COUNT}. The server may still work — check manually."
+    warn "Expected 24 tools but got ${TOOL_COUNT}. The server may still work — check manually."
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────
@@ -212,7 +212,8 @@ printf "\n"
 printf "  ${BOLD}Next steps:${RESET}\n"
 printf "    1. Start (or restart) Claude Code\n"
 printf "    2. Make sure Viking MCP is running for full scoring\n"
-printf "    3. Run: ${GREEN}/neuraltree${RESET}\n"
+printf "    3. Make sure Ollama is running with Qwen3.5: ${YELLOW}ollama pull qwen3:latest${RESET}\n"
+printf "    4. Run: ${GREEN}/neuraltree${RESET}\n"
 printf "\n"
 printf "  ${BOLD}Verify anytime:${RESET} ./install.sh --check\n"
 printf "\n"

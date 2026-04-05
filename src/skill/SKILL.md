@@ -5,8 +5,7 @@ description: >
   information system where any fact is reachable in 0-2 hops.
 version: 0.1.0
 tools_required:
-  - neuraltree-mcp (20 tools)
-  - openviking (semantic search)
+  - neuraltree-mcp (24 tools — includes Viking search + LLM judge integration)
 ---
 
 # /neuraltree — Universal Neural Organization Skill
@@ -26,8 +25,6 @@ These are operations the agent performs directly (not MCP tools). When executing
 | `write_file(path, content)` | Write content to file. Use your file writing capability. |
 | `apply_suggested_content(file, content)` | Append `content` to end of `file` (the `## Related` + `## Docs` block from `neuraltree_wire`). If those sections already exist, replace them. |
 | `update_frontmatter(file, fields)` | Parse YAML frontmatter in `file`, update the given fields, write back. Preserve all other frontmatter fields unchanged. |
-| `viking_add_resource(uri, content)` | Call Viking MCP: `viking_add_resource(uri=uri)` to re-index a file in the semantic search database. |
-| `llm_judge_precision(query)` | Re-run the Section 4 Step 3 LLM-as-Judge prompt for one query against its `viking_results`. Return precision as float (0.0-1.0). |
 | `execute_pending_action(action, project_root)` | Execute one approved action — see Section 8 inline logic for DELETE/ARCHIVE/CREATE handling. |
 | `update_state_and_history(flow_score)` | Write updated `state.json` + append to `history/`. Same logic as Section 7 Steps 1d-1e. |
 | `read_calibration_accuracy(path)` | Read `.neuraltree/calibration.json`, return `accuracy` field (default 0.5 if file missing or field absent). |
@@ -53,7 +50,7 @@ When `/neuraltree` is invoked, execute these five steps in order. Do NOT skip st
 
 ### Step 1: Verify Tools
 
-Both tool backends must be reachable before any work begins.
+The neuraltree-mcp server provides ALL tools — including Viking search and LLM judge integration. Only one backend to check.
 
 1. **neuraltree-mcp** — call `neuraltree_scan(path=".", max_files=10000)`.
    - If it returns a file inventory: **PASS**. Record the `total_count` count.
@@ -61,10 +58,11 @@ Both tool backends must be reachable before any work begins.
      Print: `FATAL: neuraltree-mcp is not available. Install and configure it before running /neuraltree.`
      Release lock if acquired. Stop.
 
-2. **Viking (openviking)** — call `viking_search(query="test")`.
-   - If it returns results (even empty): **PASS**.
-   - If it errors (connection refused, server down, timeout): set `DEGRADED_MODE = true`.
-     Print: `WARNING: Viking is unavailable. Running in DEGRADED mode — semantic search disabled, precision_at_3 will be null, EMBEDDING_GAP detection disabled.`
+2. **Viking + Ollama availability** — call `neuraltree_precision(queries=[{"text":"test"}], project_root=".")`.
+   - Check the response fields `viking_available` and `ollama_available`.
+   - If both are `true`: **PASS** — full scoring available.
+   - If `viking_available` is `false` OR `ollama_available` is `false`: set `DEGRADED_MODE = true`.
+     Print: `WARNING: Viking or Ollama unavailable. Running in DEGRADED mode — semantic search disabled, precision_at_3 will be null, EMBEDDING_GAP detection disabled.`
      Continue — the skill can still run, but scoring will be partial (Flow Score capped at 0.75).
 
 Record tool status for Step 5:
@@ -73,6 +71,7 @@ Record tool status for Step 5:
 tools:
   neuraltree_mcp: PASS | ABORT
   viking:         PASS | DEGRADED
+  ollama:         PASS | DEGRADED
 ```
 
 ### Step 2: Detect Mode
@@ -595,76 +594,42 @@ if mode == "spot-check":
         emit("queries.json not found — running full benchmark instead of spot-check")
 ```
 
-### Step 2: Viking Search (Precision@3)
+### Step 2: Precision@3 (Viking Search + LLM Judge)
 
-For each query, call Viking to retrieve the top 3 most relevant results, then read their full content. This tests whether the project's indexed content actually answers the questions an agent would ask.
-
-```
-for query in queries:
-    viking_result = viking_search(query=query["text"], limit=3)
-    # IMPORTANT: Read full content for each result — the search abstract is often
-    # empty or just "Directory overview". The LLM judge needs actual content to evaluate.
-    for result in viking_result["results"]:
-        full_content = viking_read(uri=result["uri"])
-        result["content"] = full_content[:2000]  # first ~50 lines for judging
-    query["viking_results"] = viking_result["results"]
-```
-
-Emit progress every 10 queries: `Phase 2/5: Benchmarking... {completed}/{total} queries scored`
-
-**If `DEGRADED_MODE` is true:** Skip this entire step. Set `precision_at_3 = None`. Proceed directly to Step 4. Viking is unavailable — semantic search scoring is impossible.
-
-### Step 3: LLM-as-Judge
-
-For each Viking result from Step 2, judge whether the retrieved content is actually relevant to the query. This converts raw search results into a binary relevance signal.
-
-**For each query, for each of its 3 Viking results, evaluate with this exact prompt:**
+Call `neuraltree_precision` — this single tool handles Viking search AND LLM-as-Judge internally. No need to call Viking or Ollama directly.
 
 ```
-RELEVANCE JUDGMENT
-Query: {query["text"]}
-Result file: {result["uri"]}
-Result content (first 50 lines): {result["content"]}
+precision_result = neuraltree_precision(
+    queries=queries,
+    project_root="."
+)
 
-Rubric: Would reading this file help answer the query?
-- YES if the file contains information directly useful for answering
-- NO if the file is unrelated or only tangentially mentions the topic
-
-Reply YES or NO only.
+precision_at_3 = precision_result["precision_at_3"]  # float or None if degraded
 ```
 
-**CRITICAL — LLM Configuration:**
+The tool:
+1. Searches Viking for top 3 results per query
+2. Reads full content of each result
+3. Asks Qwen3.5 (via Ollama) to judge YES/NO relevance with `think=false, temperature=0`
+4. Returns per-query precision scores and aggregate `precision_at_3`
 
-When calling a local LLM (e.g. Ollama with Qwen3.5), you MUST disable "thinking" / chain-of-thought mode. Models with built-in reasoning (Qwen3.5, DeepSeek-R1) will spend 300+ tokens reasoning before answering YES/NO, making the benchmark 10-20x slower.
-
-- **Ollama:** Set `"think": false` in the API request body
-- **Other runtimes:** Use the equivalent parameter to disable extended thinking
-- **Expected speed:** ~3-5 seconds per judgment (without thinking). If a judgment takes >30 seconds, thinking mode is likely still enabled.
-
-If the LLM does not support disabling thinking, increase `num_predict` to at least 500 tokens to ensure the answer appears after the thinking tokens.
-
-- **Recommended:** Also set `temperature: 0` (or 0.1) for deterministic YES/NO output. At default temperature, the model may prefix the answer with filler text ("Sure!", "The answer is"), causing the malformed-response rule to score it 0 instead of the intended 1.
-
-**Scoring rules:**
-- `YES` → 1 point
-- `NO` → 0 points
-- Malformed response (anything other than exactly "YES" or "NO") → 0 points (conservative — assume irrelevant)
-
-**Per-query score:** `query_precision = count(YES) / 3`
-
-**Aggregate metric:** `precision_at_3 = mean(query_precision for all queries)`
-
-This gives a float between 0.0 (Viking returns nothing useful) and 1.0 (every result for every query is relevant).
+**Response fields:**
+- `precision_at_3` — float (0.0-1.0) or null if Viking/Ollama unavailable
+- `query_results` — per-query detail with `precision`, `status` (PASS/FAIL), and `judgments`
+- `viking_available` / `ollama_available` — service status flags
+- `passed` / `failed` — query counts
 
 **Store per-query results** for later use by `neuraltree_diagnose()`:
 ```
-for query in queries:
-    query["precision"] = query_precision
-    query["judgments"] = [
-        {"uri": r["uri"], "relevant": judgment}
-        for r, judgment in zip(query["viking_results"], judgments)
+for i, qr in enumerate(precision_result["query_results"]):
+    queries[i]["precision"] = qr["precision"]
+    queries[i]["viking_results"] = [
+        {"uri": j["uri"]} for j in qr["judgments"]
     ]
+    queries[i]["judgments"] = qr["judgments"]
 ```
+
+**If `DEGRADED_MODE` is true** (or `precision_at_3` is null): Set `precision_at_3 = None`. Continue to Step 4 — structural scoring still works.
 
 ### Step 4: Structural Metrics
 
@@ -1214,7 +1179,7 @@ Claude performs the proposed action. Uses MCP tools as helpers:
 - `neuraltree_plan_move()` for safe file moves with reference updates
 - `neuraltree_generate_index()` for directory indexes
 - `neuraltree_find_dead()` for identifying orphans
-- `viking_add_resource()` for Viking indexing (if not DEGRADED_MODE)
+- `neuraltree_viking_index()` for Viking indexing (if not DEGRADED_MODE)
 
 **Key rule:** Every file Claude creates or modifies must be wired into the tree. No orphan creation. If you split a file into 3 pieces, wire all 3 with `## Related` before measuring.
 
@@ -1603,16 +1568,18 @@ for k in autoloop_state["kept"]:
 
 emit(f"Phase 5/5: Re-indexing {len(modified_files)} files in Viking...")
 
-for file_path in modified_files:
-    if os.path.exists(file_path):
-        viking_add_resource(uri=file_path, content=read_file(file_path))
+index_result = neuraltree_viking_index(
+    file_paths=list(modified_files),
+    project_root="."
+)
+emit(f"Phase 5/5: Indexed {index_result['indexed']} files, {index_result['failed']} failed")
 ```
 
-**If `DEGRADED_MODE` is true:** Skip this step entirely. Viking is unavailable — re-indexing is impossible. Emit:
+**If `DEGRADED_MODE` is true** (or `index_result["viking_available"]` is false): The tool handles this gracefully — it returns `viking_available: false` and `indexed: 0`. Emit:
 
 ```
-if DEGRADED_MODE:
-    emit("Phase 5/5: Skipping Viking re-index (DEGRADED mode)")
+if not index_result.get("viking_available", True):
+    emit("Phase 5/5: Skipping Viking re-index (Viking unavailable)")
 ```
 
 ### Step 2b: Regenerate Index Files
@@ -1648,7 +1615,7 @@ for dir_path in affected_dirs:
             write_file(os.path.join(sandbox_root, index_path), index_result["index_content"])
             # Re-index the new _INDEX.md in Viking
             if not DEGRADED_MODE:
-                viking_add_resource(uri=index_path, content=index_result["index_content"])
+                neuraltree_viking_index(file_paths=[index_path], project_root=sandbox_root)
 
 if affected_dirs:
     emit(f"Phase 5/5: Regenerated _INDEX.md for {len(affected_dirs)} directories")
@@ -2001,10 +1968,7 @@ def execute_pending_action(action, project_root):
 
         # Re-index all new files in Viking
         if not DEGRADED_MODE:
-            for nf in new_files:
-                full_path = os.path.join(project_root, nf)
-                if os.path.exists(full_path):
-                    viking_add_resource(uri=nf, content=read_file(full_path))
+            neuraltree_viking_index(file_paths=new_files, project_root=project_root)
 
         # Check for references to the original file before removing it
         move_plan = neuraltree_plan_move(
@@ -2043,7 +2007,7 @@ def execute_pending_action(action, project_root):
 
         # Index in Viking so semantic search finds it
         if not DEGRADED_MODE:
-            viking_add_resource(uri=action["target"], content=user_content)
+            neuraltree_viking_index(file_paths=[action["target"]], project_root=project_root)
 
         emit(f"  Created {action['target']} (wired + indexed)")
 ```

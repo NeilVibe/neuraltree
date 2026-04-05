@@ -12,20 +12,19 @@ NeuralTree transforms any project into a structured information system where any
 ┌─────────────────────────────────────────────────────┐
 │                  /neuraltree                         │
 │              THE BRAIN (Skill)                       │
-│   2,500-line orchestrator — benchmarks, diagnoses,   │
+│   Orchestrator — benchmarks, diagnoses,              │
 │   auto-repairs, enforces. You invoke it, it drives.  │
-├──────────────────────┬──────────────────────────────┤
-│  neuraltree-mcp      │  Viking MCP (OpenViking)     │
-│  THE MUSCLE          │  THE MEMORY                  │
-│  22 tools — scan,    │  Semantic search across      │
-│  trace, score, wire, │  all indexed content.        │
-│  diagnose, predict,  │  Embedding-powered recall    │
-│  sandbox, backup,    │  that catches what grep      │
-│  restore, lessons    │  and structure miss.          │
-└──────────────────────┴──────────────────────────────┘
+├──────────────┬──────────────────┬───────────────────┤
+│ neuraltree   │  Viking MCP      │  Qwen3.5          │
+│ THE MUSCLE   │  THE MEMORY      │  THE JUDGE        │
+│ 22 tools     │  Semantic search │  YES/NO relevance │
+│ scan, score, │  across all      │  judgments for     │
+│ wire, diag,  │  indexed content │  Precision@3      │
+│ sandbox...   │                  │  scoring           │
+└──────────────┴──────────────────┴───────────────────┘
 ```
 
-**Brain** orchestrates everything. **Muscle** does pure computation (filesystem scans, scoring, wiring). **Memory** provides semantic search. The Brain is the only component that calls the other two — clean ownership, no circular dependencies.
+**Brain** orchestrates everything. **Muscle** does pure computation (filesystem scans, scoring, wiring). **Memory** provides semantic search. **Judge** evaluates retrieval quality. The Brain is the only component that calls the other three.
 
 ---
 
@@ -61,14 +60,27 @@ That's it. NeuralTree detects it's a first run (bootstrap mode), scans your proj
 |------------|---------|---------|
 | Python | 3.11+ | MCP server runtime |
 | [FastMCP](https://github.com/jlowin/fastmcp) | 2.0.0+ | MCP server framework |
-| [Viking MCP](https://github.com/openviking) | any | Semantic search (required for full scoring; degrades gracefully without it) |
-| Claude Code | any | AI coding agent that runs skills |
+| [Viking MCP](https://github.com/openviking) | any | Semantic search — the memory layer. Indexes all project docs for embedding-powered retrieval. |
+| [Ollama](https://ollama.com) + Qwen3.5 | any | LLM-as-Judge — scores whether Viking search results actually answer test queries (Precision@3). Set `"think": false` for speed. |
+| Claude Code | any | AI coding agent that runs the skill |
+
+### Install Ollama + Qwen3.5
+
+```bash
+# Install Ollama (if not already installed)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull the model
+ollama pull qwen3:latest
+```
+
+NeuralTree calls Ollama with `"think": false` and `temperature: 0` for fast, deterministic YES/NO judgments. Without Qwen3.5, Precision@3 (25% of Flow Score) cannot be computed and scoring runs in degraded mode.
 
 ---
 
-## MCP Tools (20)
+## MCP Tools (24)
 
-NeuralTree's MCP server provides 22 tools across 6 categories:
+NeuralTree's MCP server provides 24 tools across 7 categories:
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -90,6 +102,8 @@ NeuralTree's MCP server provides 22 tools across 6 categories:
 | | `neuraltree_diagnose` | Classify retrieval failures by gap type |
 | | `neuraltree_predict` | Virtual backtest — simulate changes before applying |
 | | `neuraltree_update_calibration` | Update prediction model accuracy from real outcomes |
+| **Semantic** | `neuraltree_precision` | Compute Precision@3 — searches Viking + judges with Qwen3.5 in one call |
+| | `neuraltree_viking_index` | Batch-index local files into Viking semantic search |
 | **Sandbox** | `neuraltree_sandbox_create` | Create isolated git worktree for safe experimentation |
 | | `neuraltree_sandbox_diff` | Compare sandbox changes against original |
 | | `neuraltree_sandbox_apply` | Promote sandbox changes to the real project |
@@ -228,7 +242,7 @@ NeuralTree automatically detects the right mode based on your project's state:
 ### Run tests
 
 ```bash
-# Full test suite (256 tests)
+# Full test suite (306 tests)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Quick smoke test
