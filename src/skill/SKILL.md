@@ -81,9 +81,9 @@ When `/neuraltree` is invoked, execute these five steps in order.
    - Returns file inventory: **PASS**. Record `total_count`.
    - Errors: **ABORT**. Print: `FATAL: neuraltree-mcp is not available.`
 
-2. **Viking + Ollama** — call `neuraltree_precision(queries=[{"text":"test"}], project_root=".")`.
-   - Both `viking_available` and `ollama_available` true: **PASS**.
-   - Either false: set `DEGRADED_MODE = true`. Print warning. Continue (scoring capped at 0.75).
+2. **Viking** — call `neuraltree_precision(queries=[{"text":"test"}], project_root=".")`.
+   - `viking_available` true: **PASS**. Claude judges relevance (no external LLM needed).
+   - Viking unavailable: set `DEGRADED_MODE = true`. Print warning. Continue (scoring capped at 0.75).
 
 ### Step 2: Detect Mode
 
@@ -127,7 +127,7 @@ Subcommand overrides mode. For `enforce` and `fix`, load baseline from last run'
 ```
 /neuraltree — Activation Complete
 Mode: {mode} | Pipeline: {pipeline} | ETA: ~{duration}
-Tools: neuraltree-mcp ✓ ({file_count} files) | viking: ✓|DEGRADED | ollama: ✓|DEGRADED
+Tools: neuraltree-mcp ✓ ({file_count} files) | viking: ✓|DEGRADED | judge: Claude (sequential-thinking)
 Lock: acquired | State: {exists|new} (score: {N.NN})
 ```
 

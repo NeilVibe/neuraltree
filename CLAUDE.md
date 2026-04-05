@@ -8,15 +8,16 @@
 
 ## Current Status
 
-**COMPLETE.** 24 MCP tools (306 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 24 MCP tools (308 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
 Skill (SKILL.md) = THE BRAIN — orchestrates everything
-MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 306 tests
+MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 308 tests
 Viking MCP = THE MEMORY — semantic search
-Qwen3.5 (Ollama) = THE JUDGE — YES/NO relevance for Precision@3
+Sequential Thinking MCP = THE REASONING — step-by-step judgment
+Claude = THE JUDGE — relevance judging for Precision@3 (replaces Qwen3.5)
 ```
 
 ## MCP Server — 24 Tools
@@ -28,7 +29,7 @@ Qwen3.5 (Ollama) = THE JUDGE — YES/NO relevance for Precision@3
 | Reorganize | plan_move, plan_split, find_dead, generate_index, shrink_and_wire, split_and_wire |
 | Lessons | lesson_match, lesson_add |
 | Scoring | score, diagnose, predict, update_calibration |
-| Semantic | precision (Viking + LLM judge), viking_index (batch indexing) |
+| Semantic | precision (Viking search + content retrieval), viking_index (batch indexing) |
 | Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
 
 ## Project Structure
@@ -47,7 +48,7 @@ neuraltree/
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
 │       └── SKILL.md             The skill instruction file (2,500 lines, 9 sections — BUILT)
-├── tests/                       306 tests passing
+├── tests/                       308 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
@@ -75,7 +76,7 @@ neuraltree/
 
 ## Integration Points (all wired and verified)
 
-1. `neuraltree_score()` returns `precision_at_3: null` — Skill fills it via Viking + LLM judge
+1. `neuraltree_score()` returns `precision_at_3: null` — Skill fills it via Viking search + Claude judging
 2. `neuraltree_diagnose()` receives `viking_results` param for EMBEDDING_GAP classification
 3. `.neuraltree/state.json` is Skill-owned, not MCP-managed
 4. Lesson recording happens after autoloop KEEP/HOLD/DISCARD decisions
@@ -86,12 +87,12 @@ neuraltree/
 - Python 3.11+
 - fastmcp>=2.0.0
 - Viking MCP (OpenViking) — semantic search (required for full scoring)
-- Qwen3.5 via Ollama — LLM-as-Judge for Precision@3 scoring
+- Sequential Thinking MCP — step-by-step reasoning for judging and autoloop
 
 ## Commands
 
 ```bash
-# Run tests (306 passing)
+# Run tests (308 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Verify all 24 tools load

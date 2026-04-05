@@ -15,12 +15,12 @@ NeuralTree transforms any project into a structured information system where any
 │   Orchestrator — benchmarks, diagnoses,              │
 │   auto-repairs, enforces. You invoke it, it drives.  │
 ├──────────────┬──────────────────┬───────────────────┤
-│ neuraltree   │  Viking MCP      │  Qwen3.5          │
+│ neuraltree   │  Viking MCP      │  Claude           │
 │ THE MUSCLE   │  THE MEMORY      │  THE JUDGE        │
-│ 22 tools     │  Semantic search │  YES/NO relevance │
+│ 24 tools     │  Semantic search │  YES/NO relevance │
 │ scan, score, │  across all      │  judgments for     │
-│ wire, diag,  │  indexed content │  Precision@3      │
-│ sandbox...   │                  │  scoring           │
+│ wire, diag,  │  indexed content │  Precision@3 via  │
+│ sandbox...   │                  │  sequential-think  │
 └──────────────┴──────────────────┴───────────────────┘
 ```
 
@@ -61,20 +61,8 @@ That's it. NeuralTree detects it's a first run (bootstrap mode), scans your proj
 | Python | 3.11+ | MCP server runtime |
 | [FastMCP](https://github.com/jlowin/fastmcp) | 2.0.0+ | MCP server framework |
 | [Viking MCP](https://github.com/openviking) | any | Semantic search — the memory layer. Indexes all project docs for embedding-powered retrieval. |
-| [Ollama](https://ollama.com) + Qwen3.5 | any | LLM-as-Judge — scores whether Viking search results actually answer test queries (Precision@3). Set `"think": false` for speed. |
-| Claude Code | any | AI coding agent that runs the skill |
-
-### Install Ollama + Qwen3.5
-
-```bash
-# Install Ollama (if not already installed)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull the model
-ollama pull qwen3:latest
-```
-
-NeuralTree calls Ollama with `"think": false` and `temperature: 0` for fast, deterministic YES/NO judgments. Without Qwen3.5, Precision@3 (25% of Flow Score) cannot be computed and scoring runs in degraded mode.
+| Claude Code | any | AI coding agent that runs the skill — also serves as the judge for Precision@3 via sequential thinking |
+| Sequential Thinking MCP | any | Step-by-step reasoning for relevance judging and autoloop decisions |
 
 ---
 
@@ -102,7 +90,7 @@ NeuralTree's MCP server provides 24 tools across 7 categories:
 | | `neuraltree_diagnose` | Classify retrieval failures by gap type |
 | | `neuraltree_predict` | Virtual backtest — simulate changes before applying |
 | | `neuraltree_update_calibration` | Update prediction model accuracy from real outcomes |
-| **Semantic** | `neuraltree_precision` | Compute Precision@3 — searches Viking + judges with Qwen3.5 in one call |
+| **Semantic** | `neuraltree_precision` | Search Viking + retrieve content — Claude judges relevance externally |
 | | `neuraltree_viking_index` | Batch-index local files into Viking semantic search |
 | **Sandbox** | `neuraltree_sandbox_create` | Create isolated git worktree for safe experimentation |
 | | `neuraltree_sandbox_diff` | Compare sandbox changes against original |
