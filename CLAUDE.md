@@ -10,13 +10,13 @@
 
 **Phases 1-3 COMPLETE.** MCP server + SKILL.md built, tested, reviewed.
 **Phase 4 NEXT:** Hardening — end-to-end testing on real projects.
-**What's done:** 16 MCP tools (194 tests) + 2,350-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed).
+**What's done:** 16 MCP tools (200 tests) + 2,350-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed).
 
 ## Architecture
 
 ```
 Skill (SKILL.md) = THE BRAIN — 2,350 lines, 9 sections (BUILT, 5 REVIEW ROUNDS)
-MCP Server (neuraltree-mcp) = THE MUSCLE — 16 tools (BUILT, 194 TESTS)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 16 tools (BUILT, 200 TESTS)
 Viking MCP = THE MEMORY — semantic search (required dependency)
 ```
 
@@ -46,10 +46,10 @@ neuraltree/
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
 │       └── SKILL.md             The skill instruction file (2,350 lines, 9 sections — BUILT)
-├── tests/                       194 tests passing
+├── tests/                       200 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
-│   └── integration/             2 test files (mcp.call_tool() end-to-end)
+│   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
 ├── docs/
 │   ├── specs/                   Design spec v5 (reviewed by 25 agents)
 │   ├── FEATURE_INCIDENT_MEMORY.md  Lesson feature design
@@ -101,7 +101,7 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (194 passing)
+# Run tests (200 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Verify all 16 tools load
