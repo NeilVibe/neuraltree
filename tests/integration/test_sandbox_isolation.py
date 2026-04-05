@@ -123,3 +123,26 @@ class TestSandboxIsolation:
 
         # Clean up
         call_tool("neuraltree_sandbox_destroy", {"project_root": root})
+
+    def test_sandbox_apply_all(self, tmp_project):
+        """Apply ALL sandbox changes (files=None)."""
+        root = str(tmp_project)
+        call_tool("neuraltree_sandbox_create", {
+            "project_root": root,
+            "use_git_worktree": False,
+        })
+        sandbox_path = tmp_project / SANDBOX_REL
+
+        # Modify existing + create new
+        (sandbox_path / "CLAUDE.md").write_text("MODIFIED IN SANDBOX\n")
+        (sandbox_path / "memory" / "new_file.md").write_text("New content\n")
+
+        # Apply all (files=None)
+        result = call_tool("neuraltree_sandbox_apply", {"project_root": root})
+        assert len(result.get("applied", [])) >= 1
+
+        # Verify changes propagated
+        assert "MODIFIED IN SANDBOX" in (tmp_project / "CLAUDE.md").read_text()
+
+        # Clean up
+        call_tool("neuraltree_sandbox_destroy", {"project_root": root})

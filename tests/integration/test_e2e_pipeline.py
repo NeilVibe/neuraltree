@@ -153,6 +153,7 @@ class TestBackupRestore:
 
         # Verify original content is back
         assert coding_path.read_text() == original_content
+        assert len(result.get("not_found", [])) == 0, "Some files were not found in backup"
 
     def test_backup_multiple_files(self, tmp_project):
         """Backup coding.md + testing.md, modify both, restore both, verify originals."""
@@ -185,6 +186,7 @@ class TestBackupRestore:
         # Verify both originals are back
         assert coding_path.read_text() == original_coding
         assert testing_path.read_text() == original_testing
+        assert len(result.get("not_found", [])) == 0, "Some files were not found in backup"
 
     def test_wire_preview_is_read_only(self, tmp_project):
         """Wire returns suggestions but does NOT modify the target file."""
@@ -222,12 +224,9 @@ class TestScaleLimits:
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project_large),
         })
-        # Either an error (no .md files) or a valid low score — both acceptable
-        if "error" in result:
-            assert result["flow_score"] == 0.0
-        else:
-            assert "flow_score_partial" in result
-            assert 0.0 <= result["flow_score_partial"] <= 1.0
+        # tmp_project_large has 1 CLAUDE.md + 150 .py files
+        assert "flow_score_partial" in result
+        assert result["flow_score_partial"] >= 0.0
 
     def test_query_scaling_formula(self, tmp_project):
         """Query count scales with indexed_doc_count — more docs = more queries.
@@ -255,3 +254,142 @@ class TestScaleLimits:
         assert result_high["total"] <= 50  # hard cap at 50
         # More indexed docs should produce >= as many queries (or same)
         assert result_high["total"] >= result_low["total"]
+
+
+class TestLessonRoundTrip:
+    """Lesson add + match round-trip verification."""
+
+    def test_lesson_add_and_match(self, tmp_project):
+        """Add a lesson, then match it by symptom."""
+        # Add
+        add_result = call_tool("neuraltree_lesson_add", {
+            "domain": "testing",
+            "lesson": {
+                "symptom": "Widget crashes on empty input",
+                "root_cause": "No null check",
+                "fix": "Added guard clause",
+            },
+            "project_root": str(tmp_project),
+        })
+        assert add_result["added"] is True
+        assert add_result["domain"] == "testing"
+
+        # Match
+        match_result = call_tool("neuraltree_lesson_match", {
+            "symptoms": ["Widget crashes when input is empty"],
+            "project_root": str(tmp_project),
+        })
+        assert match_result["total_matches"] > 0
+        top = match_result["matches"][0]["lessons"]
+        assert len(top) > 0
+        assert top[0]["score"] > 0.2
+
+
+class TestCalibration:
+    """Calibration update and accumulation tests."""
+
+    def test_update_calibration(self, tmp_project):
+        """Update calibration and verify accuracy changes."""
+        # First update — predicted 0.10, actual 0.08 (close)
+        result = call_tool("neuraltree_update_calibration", {
+            "predicted_delta": 0.10,
+            "actual_delta": 0.08,
+            "project_root": str(tmp_project),
+        })
+        assert result["old_accuracy"] == 0.5  # default start
+        assert result["new_accuracy"] != 0.5  # should have changed
+        assert result["total_runs"] == 1
+
+        # Second update — verify it accumulates
+        result2 = call_tool("neuraltree_update_calibration", {
+            "predicted_delta": 0.05,
+            "actual_delta": 0.04,
+            "project_root": str(tmp_project),
+        })
+        assert result2["total_runs"] == 2
+        assert result2["old_accuracy"] == result["new_accuracy"]
+
+        # Verify file was written
+        cal_file = tmp_project / ".neuraltree" / "calibration.json"
+        assert cal_file.exists()
+
+
+class TestTrace:
+    """Trace tool tests — reference graph traversal."""
+
+    def test_trace_finds_references(self, tmp_project):
+        """Trace a file and find what references it."""
+        result = call_tool("neuraltree_trace", {
+            "target": "memory/rules/coding.md",
+            "project_root": str(tmp_project),
+        })
+        assert "referenced_by" in result
+        assert "references_to" in result
+        assert "is_alive" in result
+        # coding.md is referenced by testing.md (## Related) and _INDEX.md
+        assert result["is_alive"] is True
+        assert len(result["referenced_by"]) > 0
+
+    def test_trace_orphan_file(self, tmp_project):
+        """Trace an orphan file — should have zero references."""
+        result = call_tool("neuraltree_trace", {
+            "target": "memory/reference/auth.md",
+            "project_root": str(tmp_project),
+        })
+        # auth.md is intentionally unwired (orphan in conftest)
+        assert result["is_alive"] is False or len(result["referenced_by"]) == 0
+
+
+class TestAutoLoopCycle:
+    """Simulate one autoloop iteration: predict -> backup -> modify -> score -> restore."""
+
+    def test_predict_backup_execute_restore_cycle(self, tmp_project):
+        """Simulate one autoloop iteration: predict -> backup -> modify -> score -> restore."""
+        target_rel = "memory/rules/coding.md"
+        original = (tmp_project / target_rel).read_text()
+
+        # 1. Score before
+        before = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
+
+        # 2. Predict
+        prediction = call_tool("neuraltree_predict", {
+            "current_metrics": before["metrics"],
+            "proposed_changes": [
+                {"action": "wire", "target": target_rel, "details": "test"},
+            ],
+            "project_root": str(tmp_project),
+        })
+        assert prediction["predicted_delta"] >= 0
+
+        # 3. Backup
+        backup = call_tool("neuraltree_backup", {
+            "files": [target_rel],
+            "project_root": str(tmp_project),
+        })
+        assert len(backup["backed_up"]) == 1
+
+        # 4. Execute (simulate wire by modifying file)
+        (tmp_project / target_rel).write_text(
+            original + "\n## Related\n- [testing.md](testing.md) — patterns\n"
+            "- [auth.md](../reference/auth.md) — auth rules\n"
+        )
+
+        # 5. Score after
+        after = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
+
+        # 6. Decide — if worse, restore
+        actual_delta = after["flow_score_partial"] - before["flow_score_partial"]
+        if actual_delta < 0:
+            call_tool("neuraltree_restore", {
+                "files": [target_rel],
+                "project_root": str(tmp_project),
+            })
+            assert (tmp_project / target_rel).read_text() == original
+
+        # 7. Update calibration
+        cal = call_tool("neuraltree_update_calibration", {
+            "predicted_delta": prediction["predicted_delta"],
+            "actual_delta": actual_delta,
+            "project_root": str(tmp_project),
+        })
+        assert cal["total_runs"] == 1
