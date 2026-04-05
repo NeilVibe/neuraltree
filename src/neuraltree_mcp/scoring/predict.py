@@ -136,7 +136,63 @@ def register(mcp: FastMCP) -> None:
                 predicted["hop_efficiency"] = min(1.0, current_hop + delta)
                 impact["metric_deltas"]["hop_efficiency"] = delta
 
-            elif action == "update_freshness":
+            # --- Strategy-level actions (batch operations) ---
+
+            elif action == "split_large":
+                # Batch split all >500-line files. Big impact on trunk_pressure + hop.
+                current_trunk = predicted.get("trunk_pressure", 0.0) or 0.0
+                trunk_delta = (1.0 - current_trunk) * 0.70  # splits usually fix trunk
+                predicted["trunk_pressure"] = min(1.0, current_trunk + trunk_delta)
+                impact["metric_deltas"]["trunk_pressure"] = trunk_delta
+
+                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
+                hop_delta = (1.0 - current_hop) * 0.10
+                predicted["hop_efficiency"] = min(1.0, current_hop + hop_delta)
+                impact["metric_deltas"]["hop_efficiency"] = hop_delta
+
+                current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
+                dead_delta = (1.0 - current_dead) * 0.08
+                predicted["dead_neuron_ratio"] = min(1.0, current_dead + dead_delta)
+                impact["metric_deltas"]["dead_neuron_ratio"] = dead_delta
+
+            elif action == "wire_orphans":
+                # Batch wire all orphan files. Big impact on synapse + dead ratio.
+                current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
+                syn_delta = (1.0 - current_syn) * 0.30
+                predicted["synapse_coverage"] = min(1.0, current_syn + syn_delta)
+                impact["metric_deltas"]["synapse_coverage"] = syn_delta
+
+                current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
+                dead_delta = (1.0 - current_dead) * 0.15
+                predicted["dead_neuron_ratio"] = min(1.0, current_dead + dead_delta)
+                impact["metric_deltas"]["dead_neuron_ratio"] = dead_delta
+
+            elif action == "index_dirs":
+                # Generate indexes for all directories. Improves hop efficiency.
+                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
+                hop_delta = (1.0 - current_hop) * 0.20
+                predicted["hop_efficiency"] = min(1.0, current_hop + hop_delta)
+                impact["metric_deltas"]["hop_efficiency"] = hop_delta
+
+            elif action == "re_wire":
+                # Re-wire after splits. Moderate impact on synapse.
+                current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
+                syn_delta = (1.0 - current_syn) * 0.15
+                predicted["synapse_coverage"] = min(1.0, current_syn + syn_delta)
+                impact["metric_deltas"]["synapse_coverage"] = syn_delta
+
+            elif action == "viking_index":
+                # Index all .md files in Viking. Big impact on precision_at_3.
+                current_p3 = predicted.get("precision_at_3") or 0.0
+                p3_delta = (1.0 - current_p3) * 0.40  # Viking indexing is the #1 precision driver
+                impact["metric_deltas"]["precision_at_3"] = p3_delta
+                # Also improves hop_efficiency (Viking search = semantic hop)
+                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
+                hop_delta = (1.0 - current_hop) * 0.05
+                predicted["hop_efficiency"] = min(1.0, current_hop + hop_delta)
+                impact["metric_deltas"]["hop_efficiency"] = hop_delta
+
+            elif action == "update_freshness" or action == "freshness":
                 current_fresh = predicted.get("freshness", 0.0) or 0.0
                 headroom = 1.0 - current_fresh
                 delta = headroom * 0.04  # ~4% of remaining gap
