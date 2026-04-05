@@ -1,4 +1,4 @@
-# Session 4 Handoff — 2026-04-06
+# Session 4 Handoff — 2026-04-06 (UPDATED)
 
 ## What Was Done
 
@@ -107,6 +107,42 @@ DELETED:
   docs/FEATURE_INCIDENT_MEMORY.md
 ```
 
-## Commit
+### 4. SKILL.md Split (5x context reduction)
 
-`4711749` — `feat: Viking+Qwen integration — neuraltree_precision + neuraltree_viking_index`
+Split the 2,204-line SKILL.md into a compact router + 6 section files:
+
+```
+src/skill/
+├── SKILL.md              (233 lines) — activation, principles, pipeline routing
+├── sections/
+│   ├── benchmark.md      (131 lines) — queries + precision + score
+│   ├── diagnose.md       (127 lines) — classify failures + priority queue
+│   ├── autoloop.md       (174 lines) — Karpathy-style fix loop
+│   ├── enforce.md        (159 lines) — persist gains + re-index
+│   ├── report.md         (120 lines) — metric table + pending actions
+│   └── edge-cases.md     (70 lines)  — error recovery + bootstrap
+```
+
+Claude loads ~400 lines per phase instead of 2,204. Section files are read on demand at each phase boundary.
+
+## Commits
+
+1. `4711749` — `feat: Viking+Qwen integration — neuraltree_precision + neuraltree_viking_index`
+2. `613302a` — `docs: session 4 handoff`
+3. `e9e8fd1` — `refactor: split SKILL.md into compact router + 6 section files`
+
+## Final State
+
+```
+24 MCP tools, 316 tests passing
+SKILL.md: 233-line router + 6 section files (1,014 lines total)
+Context per phase: ~400 lines (was 2,204)
+```
+
+## To Test on NewFin
+
+1. Ensure neuraltree-mcp registered in `~/.claude.json`
+2. Viking running (`~/.openviking/start_viking.sh`)
+3. Ollama running with Qwen3.5 (`ollama serve`)
+4. `cd ~/newfin` (or any project)
+5. `/neuraltree`
