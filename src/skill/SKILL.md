@@ -1151,6 +1151,7 @@ for d in diagnosis["diagnoses"]:
         autoloop_state["held"].append({
             "failure": d,
             "gap_type": "CONTENT_GAP",
+            "target": d.get("matching_files", [None])[0] if d.get("matching_files") else d.get("query", "unknown"),
             "reason": "Content does not exist — user must provide",
             "suggested_path": d.get("fix", "TBD")
         })
@@ -1309,317 +1310,6 @@ if exit_reason:
 # Otherwise: go back to Step 1 — Claude analyzes the new state and proposes the next action
 ```
 
-#### Step 1: Predict
-
-```
-prediction = neuraltree_predict(
-    current_metrics=latest_metrics,
-    proposed_changes=[{"action": strategy.lower(), "target": "batch"}],
-    project_root=sandbox_root
-)
-predicted_delta = prediction["predicted_delta"]
-emit(f"Strategy {strategy}: predicted delta {predicted_delta:+.4f}")
-```
-
-#### Step 2: Backup
-
-```
-neuraltree_backup(files=["__ALL_MD__"], project_root=sandbox_root)
-```
-
-**`__ALL_MD__`** is a sentinel that tells the backup tool to snapshot all .md files. This is the safety net — if the strategy fails, we restore everything.
-
-#### Step 3: Execute Strategy (Claude Thinks Here)
-
-This is where Claude reads files, understands content, and makes intelligent decisions. The MCP tools propose; Claude refines.
-
-**SPLIT_LARGE strategy:**
-
-```
-# 1. Find all files >500 lines
-large_files = [f for f in scan_result["files"] if f.endswith(".md")]
-for file_path in large_files:
-    content = read_file(file_path)
-    if len(content.splitlines()) <= 500:
-        continue
-
-    # 2. Get mechanical split proposal from MCP tool
-    split_plan = neuraltree_plan_split(target=file_path, project_root=sandbox_root, max_lines=500)
-
-    # 3. CLAUDE READS AND THINKS — this is NOT mechanical
-    # - Read each proposed section's content
-    # - Merge sections that cover the same topic
-    # - Rename files to be meaningful (not CLAUDE_section_14.md)
-    # - Decide if any section is too small to be its own file
-    # - Write proper frontmatter (name, description, last_verified)
-
-    # 4. Write the refined splits
-    # For each refined split file:
-    #   - Write content with frontmatter
-    #   - Add ## Related links to sibling files from the same parent
-    #   - If not DEGRADED_MODE: viking_add_resource(uri=new_file)
-
-    # 5. Replace original with an index file linking to all splits
-    # 6. Generate _INDEX.md via neuraltree_generate_index if new directory created
-```
-
-**WIRE_ORPHANS strategy:**
-
-```
-# 1. Get the dead/orphan file list
-dead_result = neuraltree_find_dead(project_root=sandbox_root)
-
-# 2. For each orphan, wire it
-all_leaf_paths = scan_result["files"]
-wired_count = 0
-for dead_file in dead_result["dead_files"]:
-    wire_result = neuraltree_wire(
-        file_path=dead_file["path"],
-        all_leaf_paths=all_leaf_paths,
-        project_root=sandbox_root
-    )
-    if wire_result.get("suggested_content") and wire_result.get("related"):
-        # CLAUDE REVIEWS the suggestions — are these related files actually relevant?
-        # Claude reads the target file and the suggested related files.
-        # If the suggestions make sense, apply them:
-        apply_suggested_content(dead_file["path"], wire_result["suggested_content"])
-        wired_count += 1
-
-emit(f"  Wired {wired_count}/{len(dead_result['dead_files'])} orphan files")
-```
-
-**INDEX_DIRS strategy:**
-
-```
-# Find all directories containing .md files
-md_dirs = set()
-for md_file in scan_result["files"]:
-    if md_file.endswith(".md"):
-        d = os.path.dirname(md_file)
-        if d:
-            md_dirs.add(d)
-
-for dir_path in sorted(md_dirs):
-    existing_index = os.path.join(sandbox_root, dir_path, "_INDEX.md")
-    if os.path.exists(existing_index):
-        continue  # Don't overwrite existing indexes
-
-    index_result = neuraltree_generate_index(directory=dir_path, project_root=sandbox_root)
-    if index_result.get("file_count", 0) > 0:
-        write_file(os.path.join(sandbox_root, dir_path, "_INDEX.md"), index_result["index_content"])
-        if not DEGRADED_MODE:
-            viking_add_resource(uri=os.path.join(dir_path, "_INDEX.md"))
-
-emit(f"  Generated {len(md_dirs)} index files")
-```
-
-**FRESHNESS strategy:**
-
-```
-# Update last_verified on files whose content is still accurate
-for md_file in scan_result["files"]:
-    if not md_file.endswith(".md"):
-        continue
-    content = read_file(os.path.join(sandbox_root, md_file))
-    date_str = _parse_last_verified(content)
-
-    # Only update if file has frontmatter but stale/missing date
-    if "---" in content[:10]:  # has frontmatter
-        # CLAUDE READS the file and judges: is the content still accurate?
-        # If yes: update last_verified to today
-        # If no: skip (content needs updating, not just date-stamping)
-        update_frontmatter(md_file, {"last_verified": today_iso8601()})
-```
-
-**VIKING_INDEX strategy:**
-
-```
-# Index all .md files in Viking for semantic search.
-# This is the #1 driver for precision_at_3 (25% of Flow Score).
-# Requires Viking MCP (OpenViking) to be running.
-
-if DEGRADED_MODE:
-    emit("  VIKING_INDEX skipped — Viking unavailable (DEGRADED mode)")
-else:
-    md_files_to_index = [f for f in scan_result["files"] if f.endswith(".md")]
-    indexed_count = 0
-    for md_file in md_files_to_index:
-        content = read_file(os.path.join(sandbox_root, md_file))
-        viking_add_resource(uri=md_file, content=content)
-        indexed_count += 1
-
-    emit(f"  Indexed {indexed_count} files in Viking")
-
-    # After indexing, re-run precision benchmark on a sample of queries
-    # to measure the actual improvement in semantic retrieval
-    sample_queries = baseline.get("queries", [])[:20]
-    if sample_queries:
-        precision_sum = 0.0
-        for query in sample_queries:
-            viking_result = viking_search(query=query["text"], limit=3)
-            for result in viking_result.get("results", []):
-                full_content = viking_read(uri=result["uri"])
-                result["content"] = full_content[:2000]
-            query["precision"] = llm_judge_precision(query)
-            precision_sum += query["precision"]
-        new_precision = precision_sum / len(sample_queries)
-        emit(f"  Precision@3: {new_precision:.3f} ({len(sample_queries)} queries sampled)")
-```
-
-**RE_WIRE strategy:**
-
-```
-# After splits and Viking indexing created new files/connections, wire them.
-# Targets: new files from SPLIT_LARGE + files that gained Viking neighbors.
-all_leaf_paths = scan_result["files"]
-rewire_targets = set()
-
-for kept_entry in autoloop_state["kept"]:
-    if kept_entry.get("strategy") == "SPLIT_LARGE":
-        rewire_targets.update(kept_entry.get("new_files", []))
-
-# Also wire any file that doesn't have ## Related yet
-for md_file in scan_result["files"]:
-    if not md_file.endswith(".md"):
-        continue
-    content = read_file(os.path.join(sandbox_root, md_file))
-    if "## Related" not in content:
-        rewire_targets.add(md_file)
-
-for target in rewire_targets:
-    wire_result = neuraltree_wire(
-        file_path=target,
-        all_leaf_paths=all_leaf_paths,
-        project_root=sandbox_root
-    )
-    if wire_result.get("suggested_content"):
-        apply_suggested_content(target, wire_result["suggested_content"])
-```
-
-#### Step 4: Measure
-
-After executing the full strategy, re-score the entire project:
-
-```
-new_score = neuraltree_score(project_root=sandbox_root)
-new_flow = new_score["flow_score_partial"]
-
-# If not DEGRADED_MODE, re-run precision_at_3 via Viking benchmark
-if not DEGRADED_MODE:
-    # Re-run Viking search on affected queries and LLM judge
-    # (same as Section 4 Step 2-3, but only for queries related to changed files)
-    new_precision = llm_judge_precision_batch(affected_queries)
-    new_flow = new_score["flow_score_partial"] + (new_precision * 0.25)
-
-actual_delta = new_flow - current_flow_score
-emit(f"  Strategy {strategy}: {current_flow_score:.3f} → {new_flow:.3f} ({actual_delta:+.3f})")
-```
-
-#### Step 5: Decide — KEEP or DISCARD
-
-```
-if actual_delta > 0.01:  # Meaningful improvement
-    # KEEP — the strategy worked
-    current_flow_score = new_flow
-    latest_metrics = new_score["metrics"]
-    autoloop_state["kept"].append({
-        "strategy": strategy,
-        "predicted_delta": predicted_delta,
-        "actual_delta": actual_delta,
-        "files_changed": wired_count or len(split_files) or len(md_dirs),
-    })
-    emit(f"  KEEP — delta {actual_delta:+.3f}")
-
-elif actual_delta >= 0:
-    # Marginal improvement — KEEP but note low impact
-    current_flow_score = new_flow
-    latest_metrics = new_score["metrics"]
-    autoloop_state["kept"].append({
-        "strategy": strategy,
-        "predicted_delta": predicted_delta,
-        "actual_delta": actual_delta,
-        "note": "marginal",
-    })
-    emit(f"  KEEP (marginal) — delta {actual_delta:+.3f}")
-
-else:
-    # DISCARD — strategy made things worse, restore all .md files
-    neuraltree_restore(files=["__ALL_MD__"], project_root=sandbox_root)
-    autoloop_state["discarded"].append({
-        "strategy": strategy,
-        "predicted_delta": predicted_delta,
-        "actual_delta": actual_delta,
-    })
-    emit(f"  DISCARD — delta {actual_delta:+.3f}, restored from backup")
-```
-
-#### Step 6: Calibrate and Learn
-
-```
-# Calibrate prediction model
-neuraltree_update_calibration(
-    predicted_delta=predicted_delta,
-    actual_delta=actual_delta,
-    project_root="."  # Always write to real project, not sandbox
-)
-
-# Record lesson
-neuraltree_lesson_add(
-    domain=strategy.lower(),
-    lesson={
-        "symptom": f"Strategy {strategy} on {scan_result.get('project_name', 'unknown')}",
-        "root_cause": f"Predicted {predicted_delta:+.3f}, actual {actual_delta:+.3f}",
-        "fix": f"{'KEEP' if actual_delta >= 0 else 'DISCARD'}: {strategy}",
-        "key_file": "autoloop"
-    },
-    project_root="."  # Always write to real project, not sandbox
-)
-```
-
-#### Step 7: Check Exit Conditions
-
-```
-autoloop_state["iteration"] += 1
-autoloop_state["score_history"].append(current_flow_score)
-
-# Convergence detection
-if len(autoloop_state["score_history"]) >= 2:
-    delta = abs(autoloop_state["score_history"][-1] - autoloop_state["score_history"][-2])
-    if delta < 0.02:
-        autoloop_state["convergence_counter"] += 1
-    else:
-        autoloop_state["convergence_counter"] = 0
-
-exit_reason = None
-
-if current_flow_score > 0.85:
-    exit_reason = f"Healthy — Flow Score {current_flow_score:.3f} > 0.85"
-elif autoloop_state["convergence_counter"] >= 2:
-    exit_reason = f"Converged — 2 consecutive strategies with |delta| < 0.02"
-elif autoloop_state["iteration"] >= autoloop_state["max_iterations"]:
-    exit_reason = f"Hard cap — {autoloop_state['max_iterations']} strategies reached"
-
-if exit_reason:
-    emit(f"AutoLoop exit: {exit_reason}")
-    break
-```
-
-### CONTENT_GAP Routing
-
-Before the strategy loop begins, route CONTENT_GAP diagnoses directly to HOLD. These require user-provided content and cannot be auto-fixed by any strategy:
-
-```
-for d in diagnosis["diagnoses"]:
-    if d["gap_type"] == "CONTENT_GAP":
-        autoloop_state["held"].append({
-            "failure": d,
-            "gap_type": "CONTENT_GAP",
-            "reason": "Content does not exist — user must provide",
-            "suggested_path": d.get("fix", "TBD")
-        })
-```
-
-
 ### AutoLoop Summary
 
 After exiting the loop, emit a structured summary:
@@ -1717,12 +1407,16 @@ for query in baseline["queries"]:
 
     # Queries that caught real issues → promote to critical
     # These queries found failures that led to KEEP or HOLD decisions
+    # Check if any kept action touched files related to this query's source
+    query_source = query.get("source", "")
     matching_kept = any(
-        k.get("strategy", "") in query.get("source", "")
+        query_source in (k.get("files_changed", []) or [])
+        or query_source in (k.get("new_files", []) or [])
+        or query_source in (k.get("wired_files", []) or [])
         for k in autoloop_state["kept"]
     )
     matching_held = any(
-        h.get("target", h.get("query", "")) in query.get("source", "")
+        query_source in str(h.get("failure", {}).get("matching_files", []))
         for h in autoloop_state["held"]
     )
     if matching_kept or matching_held:
@@ -1900,19 +1594,12 @@ Every file that was modified, created, or wired during the AutoLoop needs to be 
 ```
 modified_files = set()
 
-# Collect all files changed by kept strategies
+# Collect all files changed by kept actions (strategy is free-text, not enum)
 for k in autoloop_state["kept"]:
-    strategy = k.get("strategy", "")
-
-    # Each strategy tracks which files it touched
-    if strategy == "SPLIT_LARGE":
-        modified_files.update(k.get("new_files", []))
-    elif strategy in ("WIRE_ORPHANS", "RE_WIRE"):
-        modified_files.update(k.get("wired_files", []))
-    elif strategy == "INDEX_DIRS":
-        modified_files.update(k.get("index_files", []))
-    elif strategy == "VIKING_INDEX":
-        pass  # Already indexed in Viking during execution
+    modified_files.update(k.get("new_files", []))
+    modified_files.update(k.get("wired_files", []))
+    modified_files.update(k.get("index_files", []))
+    modified_files.update(k.get("files_changed", []) if isinstance(k.get("files_changed"), list) else [])
 
 emit(f"Phase 5/5: Re-indexing {len(modified_files)} files in Viking...")
 
@@ -2120,8 +1807,7 @@ These are changes the autoloop already applied. They don't need approval because
 if autoloop_state["kept"]:
     emit("\nSAFE ACTIONS (executed — non-destructive):")
     for k in autoloop_state["kept"]:
-        action_desc = describe_action(k)  # e.g. "added ## Related (3 synapses)"
-        emit(f"  ✓ {k['target']} — {action_desc}")
+        emit(f"  ✓ {k['strategy']} — delta {k['actual_delta']:+.3f}")
 ```
 
 **PENDING ACTIONS (require approval — destructive):**
@@ -2179,9 +1865,9 @@ if hold_items:
 
 ```
 if autoloop_state["kept"]:
-    emit("\nKEPT (verified alive):")
+    emit("\nKEPT (verified improvements):")
     for k in autoloop_state["kept"]:
-        emit(f"  ✓ {k['target']} — {k['gap_type']} fixed, delta {k['actual_delta']:+.3f}")
+        emit(f"  ✓ {k['strategy']} — delta {k['actual_delta']:+.3f}")
 ```
 
 ### Footer
