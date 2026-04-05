@@ -47,7 +47,8 @@ class TestDiagnose:
         assert lines > 500
 
     def test_gap_priority_order(self):
-        """SYNAPSE gaps should be prioritized over CONTENT gaps."""
-        priority = ["SYNAPSE_GAP", "FOCUS_GAP", "EMBEDDING_GAP", "FRESHNESS_GAP", "CONTENT_GAP"]
+        """SYNAPSE gaps should be prioritized over CONTENT gaps (cheapest first)."""
+        # Must match the actual priority_order in diagnose.py
+        priority = ["SYNAPSE_GAP", "FRESHNESS_GAP", "EMBEDDING_GAP", "FOCUS_GAP", "CONTENT_GAP"]
         assert priority.index("SYNAPSE_GAP") < priority.index("CONTENT_GAP")
-        assert priority.index("FOCUS_GAP") < priority.index("FRESHNESS_GAP")
+        assert priority.index("FRESHNESS_GAP") < priority.index("FOCUS_GAP")

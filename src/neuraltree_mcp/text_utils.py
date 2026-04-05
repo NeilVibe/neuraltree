@@ -69,6 +69,31 @@ def extract_backtick_paths(content: str) -> list[str]:
     return [m.group(1) for m in BACKTICK_PATH_RE.finditer(content)]
 
 
+def is_referenced(basename: str, rel_path: str, content: str) -> bool:
+    """Check if a file is referenced in content using word-boundary matching.
+
+    Prevents false positives like auth.md matching oauth.md. Used by both
+    score.py (orphan detection) and reorganize.py (find_dead).
+
+    Args:
+        basename: The filename to search for (e.g. "auth.md").
+        rel_path: Relative path to search for (e.g. "memory/auth.md").
+        content: File content to search in.
+
+    Returns:
+        True if basename or rel_path appears with word boundaries in content.
+    """
+    # Word-boundary pattern prevents substring false positives
+    pattern = re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(basename) + r'(?![a-zA-Z0-9_])')
+    if pattern.search(content):
+        return True
+    if rel_path != basename:
+        path_pattern = re.compile(r'(?<![a-zA-Z0-9_])' + re.escape(rel_path) + r'(?![a-zA-Z0-9_])')
+        if path_pattern.search(content):
+            return True
+    return False
+
+
 def walk_project_files(root: Path, extensions: set[str] | None = None) -> list[Path]:
     """Walk project tree, skip SKIP_DIRS, optionally filter by extension.
 

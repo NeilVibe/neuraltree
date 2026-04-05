@@ -1,7 +1,7 @@
 """Tests for shared text utilities."""
 from neuraltree_mcp.text_utils import (
     extract_keywords, jaccard, extract_backtick_paths, walk_project_files,
-    STOPWORDS, SKIP_DIRS,
+    is_referenced, STOPWORDS, SKIP_DIRS,
 )
 
 
@@ -79,3 +79,28 @@ class TestWalkProjectFiles:
         empty = tmp_path / "empty"
         empty.mkdir()
         assert walk_project_files(empty) == []
+
+
+class TestIsReferenced:
+    def test_basename_match(self):
+        assert is_referenced("auth.md", "memory/auth.md", "See auth.md for details")
+
+    def test_no_substring_false_positive(self):
+        """oauth.md should NOT match when searching for auth.md."""
+        assert not is_referenced("auth.md", "memory/auth.md", "See oauth.md for details")
+
+    def test_rel_path_match(self):
+        assert is_referenced("auth.md", "memory/auth.md", "See memory/auth.md link")
+
+    def test_basename_equals_relpath(self):
+        """When basename == rel_path, only one check needed."""
+        assert is_referenced("auth.md", "auth.md", "See auth.md")
+
+    def test_no_match(self):
+        assert not is_referenced("auth.md", "memory/auth.md", "Nothing relevant here")
+
+    def test_word_boundary_start_of_line(self):
+        assert is_referenced("config.md", "config.md", "config.md is the main file")
+
+    def test_word_boundary_in_brackets(self):
+        assert is_referenced("setup.md", "docs/setup.md", "See [setup](setup.md) for info")

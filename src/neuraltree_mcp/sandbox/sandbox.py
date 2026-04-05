@@ -61,6 +61,7 @@ def register(mcp: FastMCP) -> None:
 
         method = "copy"
         files_copied = 0
+        worktree_warnings: list[str] = []
 
         if use_git_worktree and _is_git_repo(root):
             try:
@@ -91,8 +92,13 @@ def register(mcp: FastMCP) -> None:
                     # Count files
                     for _, _, fnames in os.walk(sandbox):
                         files_copied += len(fnames)
-            except (subprocess.SubprocessError, OSError):
-                pass
+                else:
+                    worktree_warnings.append(
+                        f"git worktree failed (rc={result.returncode}), falling back to copy. "
+                        f"stderr: {result.stderr.strip()}"
+                    )
+            except (subprocess.SubprocessError, OSError) as e:
+                worktree_warnings.append(f"git worktree exception, falling back to copy: {e}")
 
         if method == "copy":
             sandbox.mkdir(parents=True, exist_ok=True)
@@ -117,6 +123,7 @@ def register(mcp: FastMCP) -> None:
             "sandbox_path": str(sandbox),
             "method": method,
             "files_copied": files_copied,
+            "warnings": worktree_warnings,
         }
 
     @mcp.tool()
@@ -282,25 +289,42 @@ def register(mcp: FastMCP) -> None:
             return {"status": "no_sandbox", "message": "No sandbox to destroy."}
 
         # Try git worktree removal first
+        cleanup_warnings: list[str] = []
         if _is_git_repo(root):
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["git", "worktree", "remove", "--force", str(sandbox)],
                     capture_output=True, text=True, cwd=str(root), timeout=10,
                 )
+                if result.returncode != 0:
+                    cleanup_warnings.append(f"git worktree remove failed: {result.stderr.strip()}")
                 # Clean up branch
-                subprocess.run(
+                result = subprocess.run(
                     ["git", "branch", "-D", SANDBOX_BRANCH],
                     capture_output=True, text=True, cwd=str(root), timeout=5,
                 )
-            except (subprocess.SubprocessError, OSError):
-                pass
+                if result.returncode != 0:
+                    cleanup_warnings.append(f"git branch -D failed: {result.stderr.strip()}")
+            except (subprocess.SubprocessError, OSError) as e:
+                cleanup_warnings.append(f"git cleanup exception: {e}")
 
         # Force delete if still exists
         if sandbox.exists():
-            shutil.rmtree(sandbox, ignore_errors=True)
+            try:
+                shutil.rmtree(sandbox)
+            except OSError as e:
+                cleanup_warnings.append(f"rmtree failed: {e}")
+
+        # Verify cleanup actually worked
+        if sandbox.exists():
+            return {
+                "status": "failed",
+                "message": f"Sandbox at {sandbox} could not be fully removed.",
+                "warnings": cleanup_warnings,
+            }
 
         return {
             "status": "destroyed",
             "message": f"Sandbox at {sandbox} removed.",
+            "warnings": cleanup_warnings,
         }

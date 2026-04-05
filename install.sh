@@ -139,16 +139,17 @@ claude_json_path = os.path.expanduser("${CLAUDE_JSON}")
 config = {}
 
 # Read existing config if present
+import shutil
 if os.path.exists(claude_json_path):
+    # Always back up before modifying
+    backup = claude_json_path + ".neuraltree-backup"
+    shutil.copy2(claude_json_path, backup)
+    print(f"  Backed up existing config to {backup}")
     with open(claude_json_path, "r") as f:
         try:
             config = json.load(f)
         except json.JSONDecodeError:
-            # Backup corrupted file
-            import shutil
-            backup = claude_json_path + ".backup"
-            shutil.copy2(claude_json_path, backup)
-            print(f"  WARNING: Existing {claude_json_path} was invalid JSON. Backed up to {backup}")
+            print(f"  WARNING: Existing {claude_json_path} was invalid JSON — starting fresh.")
             config = {}
 
 # Ensure mcpServers key exists
@@ -190,10 +191,10 @@ tools = asyncio.run(mcp.list_tools())
 print(len(tools))
 " 2>/dev/null || echo "0")
 
-if [[ "$TOOL_COUNT" -eq 16 ]]; then
-    ok "All 16 MCP tools loaded successfully"
+if [[ "$TOOL_COUNT" -eq 20 ]]; then
+    ok "All 20 MCP tools loaded successfully"
 else
-    warn "Expected 16 tools but got ${TOOL_COUNT}. The server may still work — check manually."
+    warn "Expected 20 tools but got ${TOOL_COUNT}. The server may still work — check manually."
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────

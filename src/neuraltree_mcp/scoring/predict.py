@@ -7,6 +7,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from neuraltree_mcp.validation import validate_project_root
+from neuraltree_mcp.scoring.score import WEIGHTS
 
 # Which metrics can be simulated without Viking
 SIMULATABLE = {
@@ -25,15 +26,21 @@ DEFAULT_CALIBRATION = {
 }
 
 
-def _load_calibration(project_root: str) -> dict:
-    """Load calibration data from .neuraltree/calibration.json."""
+def _load_calibration(project_root: str) -> tuple[dict, list[str]]:
+    """Load calibration data from .neuraltree/calibration.json.
+
+    Returns (data, warnings). Falls back to defaults on missing/corrupt file.
+    """
     cal_path = Path(project_root).resolve() / ".neuraltree" / "calibration.json"
+    warnings: list[str] = []
     if cal_path.exists():
         try:
-            return json.loads(cal_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return dict(DEFAULT_CALIBRATION)
+            return json.loads(cal_path.read_text()), warnings
+        except json.JSONDecodeError as e:
+            warnings.append(f"Corrupt calibration.json (using defaults): {e}")
+        except OSError as e:
+            warnings.append(f"Cannot read calibration.json (using defaults): {e}")
+    return dict(DEFAULT_CALIBRATION), warnings
 
 
 def _save_calibration(project_root: str, data: dict) -> None:
@@ -77,9 +84,9 @@ def register(mcp: FastMCP) -> None:
         """
         try:
             validate_project_root(project_root)
-        except ValueError as e:
+        except (ValueError, OSError) as e:
             return {"error": str(e), "predicted_flow_score": 0.0, "confidence": 0.0}
-        calibration = _load_calibration(project_root)
+        calibration, cal_warnings = _load_calibration(project_root)
 
         # Start with current metrics
         predicted = dict(current_metrics)
@@ -96,15 +103,22 @@ def register(mcp: FastMCP) -> None:
                 delta = 0.05  # each wire adds ~5% (depends on total files)
                 predicted["synapse_coverage"] = min(1.0, current_syn + delta)
                 impact["metric_deltas"]["synapse_coverage"] = delta
-
-                # Also reduces dead neurons
-                current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
-                dead_delta = 0.03
-                predicted["dead_neuron_ratio"] = min(1.0, current_dead + dead_delta)
-                impact["metric_deltas"]["dead_neuron_ratio"] = dead_delta
+                # Note: wire adds outbound links FROM target, not inbound links TO target.
+                # Dead neuron ratio measures inbound references, so wiring alone
+                # does NOT reduce dead neurons. Only archive/delete does.
 
             elif action == "index":
-                # Adding _INDEX.md improves hop efficiency
+                # Re-indexing in Viking improves precision_at_3 (not simulatable,
+                # but we estimate a small delta for prediction purposes).
+                # Note: precision_at_3 is marked non-simulatable because the real
+                # improvement requires actual Viking re-index + LLM judge.
+                delta = 0.06
+                impact["metric_deltas"]["precision_at_3"] = delta
+                # Don't update predicted["precision_at_3"] — it's non-simulatable.
+                # The delta is tracked for calibration comparison only.
+
+            elif action == "generate_index":
+                # Creating _INDEX.md files improves hop efficiency (navigation)
                 current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
                 delta = 0.08
                 predicted["hop_efficiency"] = min(1.0, current_hop + delta)
@@ -138,24 +152,21 @@ def register(mcp: FastMCP) -> None:
 
             change_impacts.append(impact)
 
-        # Compute predicted flow score
-        weights = {
-            "hop_efficiency": 0.25,
-            "precision_at_3": 0.25,
-            "synapse_coverage": 0.20,
-            "dead_neuron_ratio": 0.15,
-            "freshness": 0.10,
-            "trunk_pressure": 0.05,
-        }
-
+        # Compute predicted flow score (using shared WEIGHTS from score.py)
         predicted_flow = sum(
             (predicted.get(k) or 0.0) * w
-            for k, w in weights.items()
+            for k, w in WEIGHTS.items()
         )
 
         current_flow = sum(
             (current_metrics.get(k) or 0.0) * w
-            for k, w in weights.items()
+            for k, w in WEIGHTS.items()
+        )
+
+        # Sum non-simulatable deltas (tracked but not applied to predicted metrics)
+        non_sim_delta = sum(
+            impact["metric_deltas"].get("precision_at_3", 0.0) * WEIGHTS.get("precision_at_3", 0.0)
+            for impact in change_impacts
         )
 
         # Confidence = (simulatable metrics / 6) * calibration accuracy
@@ -166,6 +177,7 @@ def register(mcp: FastMCP) -> None:
             "current_flow_score": round(current_flow, 3),
             "predicted_flow_score": round(predicted_flow, 3),
             "predicted_delta": round(predicted_flow - current_flow, 3),
+            "non_simulatable_estimated_delta": round(non_sim_delta, 3),
             "predicted_metrics": {k: round(v, 3) if v is not None else None for k, v in predicted.items()},
             "change_impacts": change_impacts,
             "confidence": round(confidence, 3),
@@ -173,6 +185,7 @@ def register(mcp: FastMCP) -> None:
                 "accuracy": calibration["accuracy"],
                 "runs": calibration["runs"],
             },
+            "warnings": cal_warnings,
         }
 
     @mcp.tool()
@@ -196,9 +209,9 @@ def register(mcp: FastMCP) -> None:
         """
         try:
             validate_project_root(project_root)
-        except ValueError as e:
+        except (ValueError, OSError) as e:
             return {"error": str(e)}
-        calibration = _load_calibration(project_root)
+        calibration, cal_warnings = _load_calibration(project_root)
         old_accuracy = calibration["accuracy"]
 
         # Prediction accuracy = 1 - |predicted - actual| / max(|predicted|, 0.01)
@@ -219,11 +232,15 @@ def register(mcp: FastMCP) -> None:
         # Keep last 20 predictions
         calibration["predictions"] = calibration["predictions"][-20:]
 
-        _save_calibration(project_root, calibration)
+        try:
+            _save_calibration(project_root, calibration)
+        except OSError as e:
+            cal_warnings.append(f"Could not save calibration: {e}")
 
         return {
             "old_accuracy": old_accuracy,
             "new_accuracy": calibration["accuracy"],
             "run_accuracy": round(run_accuracy, 3),
             "total_runs": calibration["runs"],
+            "warnings": cal_warnings,
         }

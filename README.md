@@ -12,12 +12,12 @@ NeuralTree transforms any project into a structured information system where any
 ┌─────────────────────────────────────────────────────┐
 │                  /neuraltree                         │
 │              THE BRAIN (Skill)                       │
-│   2,350-line orchestrator — benchmarks, diagnoses,   │
+│   2,500-line orchestrator — benchmarks, diagnoses,   │
 │   auto-repairs, enforces. You invoke it, it drives.  │
 ├──────────────────────┬──────────────────────────────┤
 │  neuraltree-mcp      │  Viking MCP (OpenViking)     │
 │  THE MUSCLE          │  THE MEMORY                  │
-│  16 tools — scan,    │  Semantic search across      │
+│  20 tools — scan,    │  Semantic search across      │
 │  trace, score, wire, │  all indexed content.        │
 │  diagnose, predict,  │  Embedding-powered recall    │
 │  sandbox, backup,    │  that catches what grep      │
@@ -66,9 +66,9 @@ That's it. NeuralTree detects it's a first run (bootstrap mode), scans your proj
 
 ---
 
-## MCP Tools (16)
+## MCP Tools (20)
 
-NeuralTree's MCP server provides 16 tools across 5 categories:
+NeuralTree's MCP server provides 20 tools across 6 categories:
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -78,6 +78,10 @@ NeuralTree's MCP server provides 16 tools across 5 categories:
 | | `neuraltree_restore` | Restore from backup if something goes wrong |
 | **Intelligence** | `neuraltree_wire` | Auto-generate `## Related` and `## Docs` cross-references |
 | | `neuraltree_generate_queries` | Create test queries from project context for benchmarking |
+| **Reorganize** | `neuraltree_plan_move` | Plan file move with all reference rewrites (word-boundary safe) |
+| | `neuraltree_plan_split` | Plan how to split a large file into focused neurons |
+| | `neuraltree_find_dead` | Find orphan files that nothing references |
+| | `neuraltree_generate_index` | Auto-generate `_INDEX.md` for any directory |
 | **Lessons** | `neuraltree_lesson_match` | Find past lessons matching a current situation |
 | | `neuraltree_lesson_add` | Record a new lesson from an autoloop decision |
 | **Scoring** | `neuraltree_score` | Compute structural metrics (5 of 6 — precision needs Viking) |
@@ -222,7 +226,7 @@ NeuralTree automatically detects the right mode based on your project's state:
 ### Run tests
 
 ```bash
-# Full test suite (200 tests)
+# Full test suite (256 tests)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Quick smoke test
@@ -252,14 +256,14 @@ PYTHONPATH=src python3.11 -m neuraltree_mcp.server
 neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
-│   │   ├── server.py            Entry point — registers all 16 tools
+│   │   ├── server.py            Entry point — registers all 20 tools
 │   │   ├── validation.py        Path traversal prevention
 │   │   ├── text_utils.py        Shared utilities
-│   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson
+│   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson, reorganize
 │   │   ├── scoring/             score, diagnose, predict, update_calibration
 │   │   └── sandbox/             sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 │   └── skill/
-│       └── SKILL.md             2,350-line skill instruction file
+│       └── SKILL.md             2,500-line skill instruction file
 ├── tests/
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (end-to-end via mcp.call_tool())

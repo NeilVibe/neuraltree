@@ -8,26 +8,27 @@
 
 ## Current Status
 
-**Phases 1-3 COMPLETE.** MCP server + SKILL.md built, tested, reviewed.
-**Phases 1-5 COMPLETE.** Ready for live proof run.
-**What's built:** 16 MCP tools (200 tests) + 2,350-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed) + install.sh + README.
-**NEXT:** Live proof run — execute full pipeline against `/home/neil1988/newfin` with Qwen3.5-4B as LLM judge.
+**Phases 1-5 COMPLETE + LIVE PROOF RUN DONE + SESSION 2 FIXES APPLIED.**
+**What's built:** 20 MCP tools (256 tests) + 2,500-line SKILL.md (5 review rounds, 28 agents, 63 issues fixed) + install.sh + README.
+**Session 2:** Added 4 reorganize tools (plan_move, plan_split, find_dead, generate_index). 9 bugs fixed. 4 review rounds (17 agents, 40 issues).
+**Session 3:** Wired reorganize tools into SKILL.md. Fixed ACTION_MAP prediction, FOCUS_GAP threshold (>500 lines). Ready for autoloop iteration 3.
 **Phase 6 DEFERRED:** Platform adaptation (Gemini CLI, Codex) — not needed to ship.
 
 ## Architecture
 
 ```
-Skill (SKILL.md) = THE BRAIN — 2,350 lines, 9 sections (BUILT, 5 REVIEW ROUNDS)
-MCP Server (neuraltree-mcp) = THE MUSCLE — 16 tools (BUILT, 200 TESTS)
+Skill (SKILL.md) = THE BRAIN — 2,500 lines, 9 sections (BUILT, 5 REVIEW ROUNDS)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 20 tools (BUILT, 256 TESTS)
 Viking MCP = THE MEMORY — semantic search (required dependency)
 ```
 
-## MCP Server — 16 Tools
+## MCP Server — 20 Tools
 
 | Category | Tools |
 |----------|-------|
 | Filesystem | scan, trace, backup, restore |
 | Intelligence | wire, generate_queries |
+| Reorganize | plan_move, plan_split, find_dead, generate_index |
 | Lessons | lesson_match, lesson_add |
 | Scoring | score, diagnose, predict, update_calibration |
 | Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
@@ -40,15 +41,15 @@ neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
 │   │   ├── __init__.py          Version 0.1.0
-│   │   ├── server.py            Entry point — registers all 16 tools
+│   │   ├── server.py            Entry point — registers all 20 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
-│   │   ├── tools/               6 tool modules (scan, trace, backup, wire, generate_queries, lesson)
+│   │   ├── tools/               7 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize)
 │   │   ├── scoring/             3 modules (score, diagnose, predict+update_calibration)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
-│       └── SKILL.md             The skill instruction file (2,350 lines, 9 sections — BUILT)
-├── tests/                       200 tests passing
+│       └── SKILL.md             The skill instruction file (2,500 lines, 9 sections — BUILT)
+├── tests/                       256 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
@@ -103,10 +104,10 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (200 passing)
+# Run tests (256 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
-# Verify all 16 tools load
+# Verify all 20 tools load
 PYTHONPATH=src python3.11 -c "
 import asyncio
 from neuraltree_mcp.server import mcp

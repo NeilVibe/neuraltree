@@ -7,7 +7,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from neuraltree_mcp.text_utils import extract_keywords, jaccard, extract_backtick_paths, walk_project_files
-from neuraltree_mcp.validation import validate_within_root
+from neuraltree_mcp.validation import validate_project_root, validate_within_root
 
 
 def register(mcp: FastMCP) -> None:
@@ -28,7 +28,10 @@ def register(mcp: FastMCP) -> None:
             dict with related (scored candidates), docs (code references),
             suggested_content, and warnings.
         """
-        root = Path(project_root).resolve()
+        try:
+            root = validate_project_root(project_root)
+        except (ValueError, OSError) as e:
+            return {"error": str(e)}
         target = root / file_path
 
         try:

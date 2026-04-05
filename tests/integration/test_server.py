@@ -10,7 +10,7 @@ class TestServerLoads:
         assert mcp is not None
 
     def test_all_tools_registered(self):
-        """All 14 tools should be registered."""
+        """All 20 tools should be registered."""
         from neuraltree_mcp.server import mcp
         tools = asyncio.run(mcp.list_tools())
         tool_names = [t.name for t in tools]
@@ -22,6 +22,10 @@ class TestServerLoads:
             "neuraltree_restore",
             "neuraltree_wire",
             "neuraltree_generate_queries",
+            "neuraltree_plan_move",
+            "neuraltree_plan_split",
+            "neuraltree_find_dead",
+            "neuraltree_generate_index",
             "neuraltree_lesson_match",
             "neuraltree_lesson_add",
             "neuraltree_score",
@@ -40,10 +44,10 @@ class TestServerLoads:
         assert len(tools) >= len(expected)
 
     def test_tool_count(self):
-        """Should have exactly 16 tools."""
+        """Should have exactly 20 tools."""
         from neuraltree_mcp.server import mcp
         tools = asyncio.run(mcp.list_tools())
-        assert len(tools) == 16
+        assert len(tools) == 20
 
 
 class TestToolSchemas:

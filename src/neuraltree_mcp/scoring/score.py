@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from neuraltree_mcp.text_utils import SKIP_DIRS, walk_project_files
+from neuraltree_mcp.text_utils import SKIP_DIRS, is_referenced, walk_project_files
 from neuraltree_mcp.validation import validate_project_root
 FRESHNESS_WINDOW_DAYS = 30
 
@@ -87,6 +87,16 @@ def register(mcp: FastMCP) -> None:
         if not md_files:
             return {"error": "No .md files found", "flow_score": 0.0}
 
+        # --- Single-pass file content cache ---
+        # Read all .md files once; reuse across all metric computations
+        file_contents: dict[Path, str] = {}
+        warnings: list[str] = []
+        for md_file in md_files:
+            try:
+                file_contents[md_file] = md_file.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                warnings.append(f"Could not read {os.path.relpath(md_file, root)}: {e}")
+
         # --- Hop Efficiency ---
         # Check: trunk exists, trunk links to indexes, indexes link to leaves
         trunks = trunk_paths or []
@@ -100,7 +110,6 @@ def register(mcp: FastMCP) -> None:
         hop_0_files: set[str] = set()  # resolved paths relative to root
         hop_1_files: set[str] = set()
         hop_2_files: set[str] = set()
-        warnings: list[str] = []
 
         for tp in trunks:
             trunk_file = root / tp
@@ -144,10 +153,8 @@ def register(mcp: FastMCP) -> None:
         synapse_details = []
 
         for md_file in md_files:
-            try:
-                content = md_file.read_text(encoding="utf-8", errors="replace")
-            except OSError as e:
-                warnings.append(f"Could not read {os.path.relpath(md_file, root)}: {e}")
+            content = file_contents.get(md_file)
+            if content is None:
                 continue
 
             if _has_section(content, "Related"):
@@ -169,23 +176,21 @@ def register(mcp: FastMCP) -> None:
         # --- Dead Neuron Ratio ---
         # For each .md file, check if ANY other file references it
         orphans = []
-        all_contents: dict[str, str] = {}
-        for md_file in md_files:
-            try:
-                all_contents[os.path.relpath(md_file, root)] = md_file.read_text(encoding="utf-8", errors="replace")
-            except OSError as e:
-                warnings.append(f"Could not read {os.path.relpath(md_file, root)}: {e}")
+        all_contents: dict[str, str] = {
+            os.path.relpath(md_file, root): content
+            for md_file, content in file_contents.items()
+        }
 
         for rel_path in all_contents:
             basename = Path(rel_path).name
-            is_referenced = False
+            found = False
             for other_path, other_content in all_contents.items():
                 if other_path == rel_path:
                     continue
-                if basename in other_content or rel_path in other_content:
-                    is_referenced = True
+                if is_referenced(basename, rel_path, other_content):
+                    found = True
                     break
-            if not is_referenced:
+            if not found:
                 orphans.append(rel_path)
 
         dead_neuron_ratio = 1.0 - (len(orphans) / max(len(all_contents), 1))
@@ -196,10 +201,8 @@ def register(mcp: FastMCP) -> None:
         stale_files = []
 
         for md_file in md_files:
-            try:
-                content = md_file.read_text(encoding="utf-8", errors="replace")
-            except OSError as e:
-                warnings.append(f"Could not read {os.path.relpath(md_file, root)}: {e}")
+            content = file_contents.get(md_file)
+            if content is None:
                 continue
             date_str = _parse_last_verified(content)
             if date_str:

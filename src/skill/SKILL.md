@@ -5,7 +5,7 @@ description: >
   information system where any fact is reachable in 0-2 hops.
 version: 0.1.0
 tools_required:
-  - neuraltree-mcp (16 tools)
+  - neuraltree-mcp (20 tools)
   - openviking (semantic search)
 ---
 
@@ -597,11 +597,16 @@ if mode == "spot-check":
 
 ### Step 2: Viking Search (Precision@3)
 
-For each query, call Viking to retrieve the top 3 most relevant results. This tests whether the project's indexed content actually answers the questions an agent would ask.
+For each query, call Viking to retrieve the top 3 most relevant results, then read their full content. This tests whether the project's indexed content actually answers the questions an agent would ask.
 
 ```
 for query in queries:
     viking_result = viking_search(query=query["text"], limit=3)
+    # IMPORTANT: Read full content for each result — the search abstract is often
+    # empty or just "Directory overview". The LLM judge needs actual content to evaluate.
+    for result in viking_result["results"]:
+        full_content = viking_read(uri=result["uri"])
+        result["content"] = full_content[:2000]  # first ~50 lines for judging
     query["viking_results"] = viking_result["results"]
 ```
 
@@ -619,7 +624,7 @@ For each Viking result from Step 2, judge whether the retrieved content is actua
 RELEVANCE JUDGMENT
 Query: {query["text"]}
 Result file: {result["uri"]}
-Result content (first 50 lines): {result["content"][:50_lines]}
+Result content (first 50 lines): {result["content"]}
 
 Rubric: Would reading this file help answer the query?
 - YES if the file contains information directly useful for answering
@@ -627,6 +632,18 @@ Rubric: Would reading this file help answer the query?
 
 Reply YES or NO only.
 ```
+
+**CRITICAL — LLM Configuration:**
+
+When calling a local LLM (e.g. Ollama with Qwen3.5), you MUST disable "thinking" / chain-of-thought mode. Models with built-in reasoning (Qwen3.5, DeepSeek-R1) will spend 300+ tokens reasoning before answering YES/NO, making the benchmark 10-20x slower.
+
+- **Ollama:** Set `"think": false` in the API request body
+- **Other runtimes:** Use the equivalent parameter to disable extended thinking
+- **Expected speed:** ~3-5 seconds per judgment (without thinking). If a judgment takes >30 seconds, thinking mode is likely still enabled.
+
+If the LLM does not support disabling thinking, increase `num_predict` to at least 500 tokens to ensure the answer appears after the thinking tokens.
+
+- **Recommended:** Also set `temperature: 0` (or 0.1) for deterministic YES/NO output. At default temperature, the model may prefix the answer with filler text ("Sure!", "The answer is"), causing the malformed-response rule to score it 0 instead of the intended 1.
 
 **Scoring rules:**
 - `YES` → 1 point
@@ -888,8 +905,39 @@ The MCP server returns:
 | `SYNAPSE_GAP` | Files exist and are indexed, but lack `## Related` wiring between them | Query about "build rules" fails because `build_rules.md` doesn't link to `ci_config.md` |
 | `FRESHNESS_GAP` | File exists but `last_verified` is stale (>30 days), degrading its score | Memory file from 6 months ago — content may be accurate but staleness penalizes it |
 | `EMBEDDING_GAP` | File exists on disk but Viking hasn't indexed it, so semantic search misses it | New file added to `memory/` but never run through `openviking add-resource` |
-| `FOCUS_GAP` | File is too large (>80 lines) — Viking indexes it but the relevant section is diluted | A 200-line file where the answer is on line 150 — Viking returns the file but the match quality is low |
+| `FOCUS_GAP` | File is too large (>500 lines) — Viking indexes it but the relevant section is diluted | A 700-line file where the answer is on line 500 — Viking returns the file but the match quality is low |
 | `CONTENT_GAP` | No file exists that answers this query — new content must be created | Query about a topic that was discussed verbally but never documented |
+
+### Step 2b: Enrich Dead Neuron Detection
+
+The `dead_neuron_ratio` metric from `neuraltree_score()` uses a simple orphan-file count. Enrich the diagnosis with `neuraltree_find_dead()` which uses word-boundary matching, strips `#anchors` and `?queries` from references, and handles backtick paths — producing a more accurate dead file list.
+
+```
+dead_result = neuraltree_find_dead(project_root=".")
+
+# If dead files exist, inject them as additional SYNAPSE_GAP entries
+# These files exist but nothing links to them — wiring will make them reachable
+if dead_result["total_dead"] > 0:
+    for dead_file in dead_result["dead_files"][:20]:  # cap at 20 to avoid queue bloat
+        # Only add if not already diagnosed by a failed query (check matching_files, not target_file)
+        already_diagnosed = any(
+            dead_file["path"] in d.get("matching_files", [])
+            for d in diagnosis["diagnoses"]
+        )
+        if not already_diagnosed:
+            diagnosis["diagnoses"].append({
+                "query": f"[dead neuron] {dead_file['path']}",
+                "gap_type": "SYNAPSE_GAP",
+                "target_file": dead_file["path"],
+                "matching_files": [dead_file["path"]],
+                "fix": f"Wire {dead_file['path']} with ## Related links to make it reachable",
+                "source": "neuraltree_find_dead"
+            })
+    diagnosis["gap_counts"]["SYNAPSE_GAP"] = sum(
+        1 for d in diagnosis["diagnoses"] if d["gap_type"] == "SYNAPSE_GAP"
+    )
+    diagnosis["total_failures"] = len(diagnosis["diagnoses"])
+```
 
 ### Step 3: Enrich with Lessons
 
@@ -1100,7 +1148,7 @@ else:
 # Use sandbox_root as project_root for all MCP calls in this loop
 ```
 
-> **Note:** All `project_root="."` calls in Steps 2-9 below should use `project_root=sandbox_root` instead. This ensures bootstrap and critical mode changes are isolated in the sandbox, while other modes operate directly on the project.
+> **Note:** All MCP calls in Steps 1b-8 below use `project_root=sandbox_root`. This ensures bootstrap and critical mode changes are isolated in the sandbox, while other modes (where `sandbox_root="."`) operate directly on the project.
 
 ### Per-Iteration Steps
 
@@ -1130,26 +1178,45 @@ autoloop_state["attempted"].add(dedup_key)
 Gap types that cannot be auto-fixed are routed directly to HOLD:
 
 ```
-if failure["gap_type"] in ("CONTENT_GAP", "FOCUS_GAP"):
-    # These require user judgment — skip predict/backup/execute/measure
-    if failure["gap_type"] == "CONTENT_GAP":
-        autoloop_state["held"].append({
-            "failure": failure,
-            "gap_type": "CONTENT_GAP",
-            "reason": "Content does not exist — user must provide",
-            "suggested_path": failure.get("fix", "TBD")
-        })
-    elif failure["gap_type"] == "FOCUS_GAP":
+if failure["gap_type"] == "CONTENT_GAP":
+    # Content doesn't exist — user must provide. Skip predict/backup/execute/measure.
+    autoloop_state["held"].append({
+        "failure": failure,
+        "gap_type": "CONTENT_GAP",
+        "reason": "Content does not exist — user must provide",
+        "suggested_path": failure.get("fix", "TBD")
+    })
+    continue  # Skip Steps 2-9 entirely
+
+elif failure["gap_type"] == "FOCUS_GAP":
+    # Use neuraltree_plan_split to generate a concrete split proposal
+    split_plan = neuraltree_plan_split(
+        target=failure["target_file"],
+        project_root=sandbox_root,
+        max_lines=500
+    )
+    if split_plan.get("needs_split") and split_plan.get("splits"):
         autoloop_state["held"].append({
             "failure": failure,
             "gap_type": "FOCUS_GAP",
-            "reason": "FOCUS_GAP splits require user judgment on section boundaries",
-            "suggested_action": f"Split {failure['target_file']} into focused leaves"
+            "reason": f"File is {split_plan['total_lines']} lines with {split_plan['section_count']} sections — split proposed",
+            "target": failure["target_file"],
+            "split_plan": split_plan["splits"],
+            "index_file": split_plan.get("index_file"),
+            "suggested_action": f"Split {failure['target_file']} into {len(split_plan['splits'])} focused leaves"
+        })
+    else:
+        autoloop_state["held"].append({
+            "failure": failure,
+            "gap_type": "FOCUS_GAP",
+            "reason": split_plan.get("message", "No ## headings found — manual split needed"),
+            "target": failure["target_file"],
+            "suggested_action": f"Manually split {failure['target_file']} into focused leaves"
         })
     continue  # Skip Steps 2-9 entirely
 ```
 
-**Why early routing matters:** CONTENT_GAP and FOCUS_GAP both end up in HOLD regardless — they cannot be auto-fixed. Without this guard, they wastefully pass through `neuraltree_predict()` (Step 2) and the backup guard (Step 3) before hitting `continue` in Step 4. Early routing saves one MCP call per non-fixable gap and makes the control flow explicit.
+**Why early routing matters:** CONTENT_GAP cannot be auto-fixed (user must provide content). FOCUS_GAP uses `neuraltree_plan_split()` to generate a concrete split proposal with filenames, line ranges, and section counts — but the actual split execution requires user approval because it's destructive (replaces one file with many). Early routing saves MCP calls and makes the control flow explicit.
 
 #### Step 2: Predict
 
@@ -1186,7 +1253,7 @@ prediction = neuraltree_predict(
         "target": failure.get("target_file", failure.get("query", "")),
         "gap_type": failure["gap_type"]
     }],
-    project_root="."
+    project_root=sandbox_root
 )
 
 predicted_delta = prediction["predicted_delta"]
@@ -1220,18 +1287,18 @@ elif failure["gap_type"] == "SYNAPSE_GAP":
     wire_preview = neuraltree_wire(
         file_path=failure["target_file"],
         all_leaf_paths=scan_result["files"],
-        project_root="."
+        project_root=sandbox_root
     )
     backed_up_files = [failure["target_file"]] + [r["file"] for r in wire_preview.get("related", [])]
     backup_result = neuraltree_backup(
         files=backed_up_files,
-        project_root="."
+        project_root=sandbox_root
     )
 else:
     backed_up_files = [failure["target_file"]]
     backup_result = neuraltree_backup(
         files=backed_up_files,
-        project_root="."
+        project_root=sandbox_root
     )
 ```
 
@@ -1247,7 +1314,7 @@ Apply the fix based on the gap type. Each gap type has a specific execution stra
 wire_result = neuraltree_wire(
     file_path=failure["target_file"],
     all_leaf_paths=scan_result["files"],
-    project_root="."
+    project_root=sandbox_root
 )
 
 # Apply the suggested wiring content
@@ -1293,7 +1360,7 @@ After applying the fix, re-measure everything. No assumptions about improvement 
 **5a. Re-run structural scoring:**
 
 ```
-new_score_result = neuraltree_score(project_root=".")
+new_score_result = neuraltree_score(project_root=sandbox_root)
 ```
 
 **5b. Re-run Viking search for affected queries:**
@@ -1309,6 +1376,10 @@ if not DEGRADED_MODE:
 
     for query in affected_queries:
         viking_result = viking_search(query=query["text"], limit=3)
+        # Read full content — search abstracts are often empty (same as Section 4 Step 2)
+        for result in viking_result["results"]:
+            full_content = viking_read(uri=result["uri"])
+            result["content"] = full_content[:2000]
         query["viking_results"] = viking_result["results"]
         # Re-run LLM judge on new results
         query["precision"] = llm_judge_precision(query)
@@ -1401,7 +1472,7 @@ else:
     # Restore ALL files that were backed up this iteration (target + neighbors for SYNAPSE_GAP)
     restore_result = neuraltree_restore(
         files=backed_up_files,
-        project_root="."
+        project_root=sandbox_root
     )
     if restore_result.get("not_found"):
         emit(f"WARNING: Could not restore some files: {restore_result['not_found']}. Files may be in modified state.")
@@ -1423,7 +1494,7 @@ After every decision, feed the prediction/actual pair back to the calibration sy
 neuraltree_update_calibration(
     predicted_delta=predicted_delta,
     actual_delta=actual_delta,
-    project_root="."
+    project_root=sandbox_root
 )
 ```
 
@@ -1444,7 +1515,7 @@ neuraltree_lesson_add(
         "fix": f"KEEP: {proposed_action}. Score improved {current_flow_score - actual_delta:.3f} → {current_flow_score:.3f}.",
         "key_file": failure.get("target_file", "unknown")
     },
-    project_root="."
+    project_root=sandbox_root
 )
 ```
 
@@ -1459,7 +1530,7 @@ neuraltree_lesson_add(
         "fix": f"DISCARD: {proposed_action}. Fix rolled back. Target may resist automated {proposed_action} — consider manual intervention.",
         "key_file": failure.get("target_file", "unknown")
     },
-    project_root="."
+    project_root=sandbox_root
 )
 ```
 
@@ -1839,6 +1910,43 @@ if DEGRADED_MODE:
     emit("Phase 5/5: Skipping Viking re-index (DEGRADED mode)")
 ```
 
+### Step 2b: Regenerate Index Files
+
+After splits, moves, and wiring, directory contents may have changed. Use `neuraltree_generate_index()` to regenerate `_INDEX.md` files for any directory that was affected.
+
+```
+# Collect directories that had files added, removed, or split
+affected_dirs = set()
+
+for k in autoloop_state["kept"]:
+    target_dir = os.path.dirname(k["target"])
+    if target_dir:
+        affected_dirs.add(target_dir)
+
+# Also check HELD FOCUS_GAP splits that were executed via pending actions
+for h in autoloop_state["held"]:
+    if h.get("gap_type") == "FOCUS_GAP" and h.get("target"):
+        target_dir = os.path.dirname(h["target"])
+        if target_dir:
+            affected_dirs.add(target_dir)
+
+for dir_path in affected_dirs:
+    if os.path.isdir(os.path.join(sandbox_root, dir_path)):
+        index_result = neuraltree_generate_index(
+            directory=dir_path,
+            project_root=sandbox_root
+        )
+        if index_result.get("file_count", 0) > 0:
+            index_path = os.path.join(dir_path, "_INDEX.md")
+            write_file(os.path.join(sandbox_root, index_path), index_result["index_content"])
+            # Re-index the new _INDEX.md in Viking
+            if not DEGRADED_MODE:
+                viking_add_resource(uri=index_path, content=index_result["index_content"])
+
+if affected_dirs:
+    emit(f"Phase 5/5: Regenerated _INDEX.md for {len(affected_dirs)} directories")
+```
+
 ### Step 3: Install Organization Rule
 
 Create a `.claude/rules/neuraltree.md` file in the target project. This rule ensures that the project's organizational standards are enforced in every Claude Code session — not just during NeuralTree runs.
@@ -1862,7 +1970,7 @@ NEURALTREE_RULE_CONTENT = """# NeuralTree Organization Rule
 
 ## File Standards (Memory & Docs)
 
-- **Size:** 20-80 lines per leaf file. Trunks (_INDEX.md, MEMORY.md) under 100 lines.
+- **Size:** Aim for 20-80 lines per leaf (ideal). Files >500 lines trigger FOCUS_GAP (autoloop split threshold). Trunks (_INDEX.md, MEMORY.md) under 100 lines.
 - **Frontmatter:** Every leaf file must have `name`, `description`, `type`, `last_verified`
 - **## Related:** Every leaf must link to 1-5 related files (synapses)
 - **## Docs:** Reference project files where applicable
@@ -2007,7 +2115,14 @@ for held in autoloop_state["held"]:
     if held.get("gap_type") == "CONTENT_GAP":
         pending_actions.append({"type": "CREATE", "target": held.get("suggested_path", "unknown"), "reason": held["reason"]})
     elif held.get("gap_type") == "FOCUS_GAP":
-        pending_actions.append({"type": "SPLIT", "target": held.get("target", "unknown"), "reason": held["reason"]})
+        # Carry the split_plan from neuraltree_plan_split (computed in Section 6 Step 1b)
+        pending_actions.append({
+            "type": "SPLIT",
+            "target": held.get("target", "unknown"),
+            "reason": held["reason"],
+            "split_plan": held.get("split_plan", []),
+            "index_file": held.get("index_file"),
+        })
 
 if pending_actions:
     emit("\nPENDING ACTIONS (require approval — destructive):")
@@ -2019,7 +2134,13 @@ if pending_actions:
         elif pa["type"] == "CREATE":
             emit(f"  {i}. ⚠ CREATE {pa['target']} — {pa['reason']}")
         elif pa["type"] == "SPLIT":
-            emit(f"  {i}. ⚠ SPLIT {pa['target']} — {pa['reason']}")
+            split_count = len(pa.get("split_plan", []))
+            emit(f"  {i}. ⚠ SPLIT {pa['target']} → {split_count} files — {pa['reason']}")
+            # Show proposed filenames for transparency
+            for sp in pa.get("split_plan", [])[:5]:
+                emit(f"       └─ {sp['filename']} ({sp['estimated_lines']} lines) — {sp['heading']}")
+            if split_count > 5:
+                emit(f"       └─ ... and {split_count - 5} more")
 ```
 
 **NEEDS REVIEW (HOLD items):**
@@ -2106,25 +2227,96 @@ def execute_pending_action(action, project_root):
         emit(f"  Deleted {action['target']}")
 
     elif action["type"] == "ARCHIVE":
+        # Use neuraltree_plan_move to compute all reference rewrites BEFORE moving
+        archive_dest = os.path.join("archive", os.path.basename(action["target"]))
+        move_plan = neuraltree_plan_move(
+            source=action["target"],
+            destination=archive_dest,
+            project_root=project_root
+        )
+        if move_plan.get("error"):
+            emit(f"  ERROR: {move_plan['error']} — skipping archive of {action['target']}")
+            return
+
+        # Execute the move
         archive_dir = os.path.join(project_root, "archive")
         os.makedirs(archive_dir, exist_ok=True)
-        dest = os.path.join(archive_dir, os.path.basename(action["target"]))
-        shutil.move(os.path.join(project_root, action["target"]), dest)
-        # Update any _INDEX.md that referenced the moved file
-        emit(f"  Archived {action['target']} → archive/{os.path.basename(action['target'])}")
+        shutil.move(
+            os.path.join(project_root, action["target"]),
+            os.path.join(project_root, archive_dest)
+        )
+
+        # Apply all reference rewrites computed by plan_move
+        for rewrite in move_plan.get("rewrites", []):
+            file_content = read_file(os.path.join(project_root, rewrite["file"]))
+            file_content = file_content.replace(rewrite["old_text"], rewrite["new_text"])
+            write_file(os.path.join(project_root, rewrite["file"]), file_content)
+
+        emit(f"  Archived {action['target']} → {archive_dest} ({len(move_plan.get('rewrites', []))} references updated)")
 
     elif action["type"] == "SPLIT":
-        emit(f"FOCUS_GAP: {action['target']} is too large and should be split into focused leaves.")
-        emit(f"  1. Read the file and identify distinct topics/sections")
-        emit(f"  2. Create a new leaf file for each topic (20-80 lines each)")
-        emit(f"  3. Update _INDEX.md and ## Related links to point to the new leaves")
-        emit(f"  4. Re-index all new files in Viking")
-        emit(f"  Manual splitting recommended — type 'skip' to defer.")
+        # Use the split_plan from Step 1b (already computed via neuraltree_plan_split)
+        split_plan = action.get("split_plan", [])
+        if not split_plan:
+            emit(f"  No split plan available for {action['target']} — run neuraltree_plan_split() first.")
+            return
+
+        emit(f"FOCUS_GAP: {action['target']} → {len(split_plan)} focused leaves proposed:")
+        for sp in split_plan:
+            emit(f"    {sp['filename']} ({sp['estimated_lines']} lines) — {sp['heading']}")
+
+        emit(f"  Execute this split? (yes / skip)")
         user_content = wait_for_user_input()
         if user_content.strip().lower() == "skip":
             return  # Deferred to next run
-        # User confirmed — they will handle the split manually
-        emit(f"  Split of {action['target']} acknowledged. Verify results on next /neuraltree run.")
+
+        # Execute the split: read original, write each section to its proposed file
+        original_content = read_file(os.path.join(project_root, action["target"]))
+        original_lines = original_content.splitlines()
+
+        new_files = []
+        for sp in split_plan:
+            start = sp["start_line"] - 1  # convert 1-indexed to 0-indexed
+            end = sp["end_line"]
+            section_content = "\n".join(original_lines[start:end]) + "\n"
+            write_file(os.path.join(project_root, sp["filename"]), section_content)
+            new_files.append(sp["filename"])
+
+        # Generate an index file for the split pieces
+        split_dir = os.path.dirname(action["target"]) or "."
+        index_result = neuraltree_generate_index(
+            directory=split_dir,
+            project_root=project_root
+        )
+        if index_result.get("index_content"):
+            index_path = action.get("index_file") or os.path.join(split_dir, "_INDEX.md")
+            write_file(os.path.join(project_root, index_path), index_result["index_content"])
+            new_files.append(index_path)
+
+        # Re-index all new files in Viking
+        if not DEGRADED_MODE:
+            for nf in new_files:
+                full_path = os.path.join(project_root, nf)
+                if os.path.exists(full_path):
+                    viking_add_resource(uri=nf, content=read_file(full_path))
+
+        # Check for references to the original file before removing it
+        move_plan = neuraltree_plan_move(
+            source=action["target"],
+            destination=new_files[0] if new_files else action["target"],
+            project_root=project_root
+        )
+        if move_plan.get("references_found", 0) > 0:
+            emit(f"  WARNING: {move_plan['references_found']} files reference {action['target']}. Update them to point to the appropriate split file.")
+            for rw in move_plan.get("rewrites", [])[:5]:
+                emit(f"       └─ {rw['file']}:{rw['line']}")
+
+        # Remove the original file — it has been replaced by split leaves
+        original_path = os.path.join(project_root, action["target"])
+        if os.path.exists(original_path):
+            os.remove(original_path)
+
+        emit(f"  Split {action['target']} → {len(new_files)} files. Original removed. Re-indexed in Viking.")
         return
 
     elif action["type"] == "CREATE":

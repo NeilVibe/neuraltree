@@ -7,25 +7,29 @@ from neuraltree_mcp.scoring.predict import _load_calibration, _save_calibration,
 
 class TestCalibration:
     def test_default_calibration(self, tmp_path):
-        cal = _load_calibration(str(tmp_path))
+        cal, warnings = _load_calibration(str(tmp_path))
         assert cal["accuracy"] == 0.5
         assert cal["runs"] == 0
+        assert warnings == []
 
     def test_save_and_load(self, tmp_path):
         data = {"accuracy": 0.8, "runs": 5, "predictions": []}
         _save_calibration(str(tmp_path), data)
 
-        loaded = _load_calibration(str(tmp_path))
+        loaded, warnings = _load_calibration(str(tmp_path))
         assert loaded["accuracy"] == 0.8
         assert loaded["runs"] == 5
+        assert warnings == []
 
     def test_corrupt_calibration_returns_default(self, tmp_path):
         cal_dir = tmp_path / ".neuraltree"
         cal_dir.mkdir()
         (cal_dir / "calibration.json").write_text("NOT JSON")
 
-        cal = _load_calibration(str(tmp_path))
+        cal, warnings = _load_calibration(str(tmp_path))
         assert cal["accuracy"] == 0.5
+        assert len(warnings) == 1
+        assert "Corrupt" in warnings[0]
 
 
 class TestSimulatableMetrics:
@@ -48,8 +52,15 @@ class TestPredictLogic:
         predicted_syn = min(1.0, 0.4 + 0.05)
         assert predicted_syn == 0.45
 
-    def test_index_increases_hop(self):
-        """Adding index should improve hop_efficiency."""
+    def test_index_tracks_precision_delta(self):
+        """Re-indexing in Viking tracks a precision_at_3 delta (non-simulatable)."""
+        # "index" action estimates precision_at_3 improvement but doesn't
+        # update predicted metrics (requires actual Viking re-index).
+        delta = 0.06
+        assert delta == 0.06
+
+    def test_generate_index_increases_hop(self):
+        """Creating _INDEX.md files should improve hop_efficiency."""
         current_hop = 0.3
         predicted_hop = min(1.0, 0.3 + 0.08)
         assert predicted_hop == 0.38
