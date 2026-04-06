@@ -1,10 +1,26 @@
 """Shared test fixtures for neuraltree tests."""
+import asyncio
+import json
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
 import pytest
+
+from neuraltree_mcp.server import mcp
+
+
+def call_tool(name: str, args: dict) -> dict:
+    """Helper to call an MCP tool synchronously and parse the result."""
+    result = asyncio.run(mcp.call_tool(name, args))
+    if hasattr(result, "structured_content") and result.structured_content is not None:
+        return result.structured_content
+    if hasattr(result, "content"):
+        for block in result.content:
+            if hasattr(block, "text"):
+                return json.loads(block.text)
+    return result
 
 
 @pytest.fixture

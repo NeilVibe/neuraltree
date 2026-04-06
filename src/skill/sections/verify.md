@@ -60,7 +60,7 @@ else:
 
 response = wait_for_user_input()
 if "approve" in response.lower():
-    neuraltree_sandbox_apply(project_root=".")
+    neuraltree_sandbox_apply(project_root=".")  # files=None means apply ALL sandbox changes
     emit("Changes applied.")
 
     # Update state
