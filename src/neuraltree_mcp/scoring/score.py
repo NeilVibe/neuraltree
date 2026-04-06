@@ -64,6 +64,7 @@ def _compute_freshness(file_contents: dict[Path, str], md_files: list[Path], roo
     for md_file in md_files:
         content = file_contents.get(md_file)
         if content is None:
+            stale_files.append(os.path.relpath(md_file, root))
             continue
         date_str = _parse_last_verified(content)
         if date_str:
@@ -89,8 +90,10 @@ def _load_knowledge_map(root: Path) -> dict | None:
         return None
     try:
         return json.loads(km_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"error": "corrupt"}
+    except json.JSONDecodeError as e:
+        return {"error": f"corrupt: {e}"}
+    except OSError as e:
+        return {"error": f"unreadable: {e}"}
 
 
 def _derive_adaptive_thresholds(knowledge_map: dict) -> dict:
@@ -318,7 +321,11 @@ def register(mcp: FastMCP) -> None:
                 }
             else:
                 # No knowledge map or corrupt — fall back to static thresholds
-                reason = "corrupt knowledge_map" if knowledge_map is not None else "no knowledge_map"
+                if knowledge_map is None:
+                    reason = "no knowledge_map"
+                else:
+                    err_msg = knowledge_map.get("error", "")
+                    reason = "unreadable knowledge_map" if err_msg.startswith("unreadable") else "corrupt knowledge_map"
                 adaptive_context = {"source": "static", "reason": reason}
                 # Use standard static trunk pressure
                 if trunk_lines < 80:

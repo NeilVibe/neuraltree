@@ -11,11 +11,12 @@ from neuraltree_mcp.validation import validate_project_root
 
 
 KNOWLEDGE_MAP_FILE = ".neuraltree/knowledge_map.json"
+REQUIRED_MAP_KEYS = {"files", "edges"}
 
 
 def _has_path_traversal(path: str) -> bool:
     """Return True if a path contains traversal sequences or is absolute."""
-    return path.startswith("/") or ".." in path.split("/")
+    return Path(path).is_absolute() or ".." in Path(path).parts
 
 
 def _validate_map_paths(knowledge_map: dict) -> str | None:
@@ -75,11 +76,17 @@ def _load_map(project_root: str) -> dict | None:
     if not target.exists():
         return None
     try:
-        return json.loads(target.read_text(encoding="utf-8"))
+        data = json.loads(target.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return {"error": f"knowledge_map.json exists but is corrupt: {exc}"}
     except OSError as exc:
         return {"error": f"knowledge_map.json exists but cannot be read: {exc}"}
+    if not isinstance(data, dict):
+        return {"error": "knowledge_map.json has invalid schema: not a dict"}
+    if not REQUIRED_MAP_KEYS.issubset(data.keys()):
+        missing = REQUIRED_MAP_KEYS - data.keys()
+        return {"error": f"knowledge_map.json has invalid schema: missing keys {missing}"}
+    return data
 
 
 def _query_map(
