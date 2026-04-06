@@ -13,7 +13,7 @@
 ## Architecture
 
 ```
-Skill (SKILL.md) = THE BRAIN — explore-first orchestration
+Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — explore-first orchestration
 MCP Server (neuraltree-mcp) = THE MUSCLE — 26 tools, 426 tests
 Viking MCP = THE MEMORY — semantic search
 Agent Swarm = THE EYES — 2-10 parallel explorers
@@ -91,12 +91,14 @@ neuraltree/
 
 ## Key Principles
 
-- **Artery Principle:** It's about FLOW, not storage. Every decision serves information retrieval.
-- **0-1-2 Hop Rule:** Any information reachable in max 2 tool calls.
-- **Trace Before Prune:** Investigate every connection before recommending deletion.
-- **User Approves Destructive Actions:** Autoloop thinks, user decides on deletes/moves.
-- **Sandbox First:** Autoloop runs in isolated git worktree, never touches real project.
-- **Algorithm → Tool, Judgment → Claude:** Deterministic logic lives in MCP tools. Reasoning lives in the Skill. See `lessons/v2-design-decisions.md`.
+See [concept index](docs/concepts/_INDEX.md) for deep-dive pages on each principle.
+
+- **[Artery Principle](docs/concepts/artery-principle.md):** It's about FLOW, not storage. Every decision serves information retrieval.
+- **[0-1-2 Hop Rule](docs/concepts/hop-rule.md):** Any information reachable in max 2 tool calls.
+- **[Trace Before Prune](docs/concepts/trace-before-prune.md):** Investigate every connection before recommending deletion.
+- **[User Approves Destructive Actions](docs/concepts/user-approves-destructive.md):** Autoloop thinks, user decides on deletes/moves.
+- **[Sandbox First](docs/concepts/sandbox-first.md):** Autoloop runs in isolated git worktree, never touches real project.
+- **[Algorithm → Tool, Judgment → Claude](docs/concepts/algorithm-tool-judgment-claude.md):** Deterministic logic lives in MCP tools. Reasoning lives in the Skill. See [lessons/v2-design-decisions.md](lessons/v2-design-decisions.md).
 
 ## Integration Points (all wired and verified)
 
