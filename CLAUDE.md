@@ -8,24 +8,36 @@
 
 ## Current Status
 
-**COMPLETE.** 24 MCP tools (308 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 25 MCP tools (345 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
-Skill (SKILL.md) = THE BRAIN — orchestrates everything
-MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 308 tests
+Skill (SKILL.md) = THE BRAIN — explore-first orchestration
+MCP Server (neuraltree-mcp) = THE MUSCLE — 25 tools, 345 tests
 Viking MCP = THE MEMORY — semantic search
-Sequential Thinking MCP = THE REASONING — step-by-step judgment
-Claude = THE JUDGE — relevance judging for Precision@3 (replaces Qwen3.5)
+Agent Swarm = THE EYES — 2-10 parallel explorers
+Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
 ```
 
-## MCP Server — 24 Tools
+## Pipeline (v2)
+
+```
+Phase 1: EXPLORE  — N agents read project deeply in parallel
+Phase 2: MAP      — synthesize into dual-layer knowledge map
+Phase 3: ANALYZE  — Claude reasons about what's wrong  
+Phase 4: PLAN     — propose reorganization, user approves
+Phase 5: EXECUTE  — apply in sandbox
+Phase 6: VERIFY   — adaptive scoring confirms improvement
+```
+
+## MCP Server — 25 Tools
 
 | Category | Tools |
 |----------|-------|
 | Filesystem | scan, trace, backup, restore |
 | Intelligence | wire, generate_queries |
+| Knowledge Map | neuraltree_knowledge_map (save/load/query) |
 | Reorganize | plan_move, plan_split, find_dead, generate_index, shrink_and_wire, split_and_wire |
 | Lessons | lesson_match, lesson_add |
 | Scoring | score, diagnose, predict, update_calibration |
@@ -40,15 +52,23 @@ neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
 │   │   ├── __init__.py          Version 0.1.0
-│   │   ├── server.py            Entry point — registers all 24 tools
+│   │   ├── server.py            Entry point — registers all 25 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
 │   │   ├── tools/               7 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize)
 │   │   ├── scoring/             3 modules (score, diagnose, predict+update_calibration)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
-│       └── SKILL.md             The skill instruction file (2,500 lines, 9 sections — BUILT)
-├── tests/                       308 tests passing
+│       ├── SKILL.md             The skill router (v2, explore-first)
+│       └── sections/            7 phase files
+│           ├── explore.md       Phase 1: parallel agent exploration
+│           ├── map.md           Phase 2: knowledge map synthesis
+│           ├── analyze.md       Phase 3: Claude-driven analysis
+│           ├── plan.md          Phase 4: reorganization proposals
+│           ├── execute.md       Phase 5: sandbox execution
+│           ├── verify.md        Phase 6: adaptive scoring
+│           └── report.md        Output: before/after comparison
+├── tests/                       345 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
@@ -92,10 +112,10 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (308 passing)
+# Run tests (345 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
-# Verify all 24 tools load
+# Verify all 25 tools load
 PYTHONPATH=src python3.11 -c "
 import asyncio
 from neuraltree_mcp.server import mcp

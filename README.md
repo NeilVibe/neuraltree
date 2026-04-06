@@ -17,7 +17,7 @@ NeuralTree transforms any project into a structured information system where any
 ├──────────────┬──────────────────┬───────────────────┤
 │ neuraltree   │  Viking MCP      │  Claude           │
 │ THE MUSCLE   │  THE MEMORY      │  THE JUDGE        │
-│ 24 tools     │  Semantic search │  YES/NO relevance │
+│ 25 tools     │  Semantic search │  YES/NO relevance │
 │ scan, score, │  across all      │  judgments for     │
 │ wire, diag,  │  indexed content │  Precision@3 via  │
 │ sandbox...   │                  │  sequential-think  │
@@ -66,9 +66,9 @@ That's it. NeuralTree detects it's a first run (bootstrap mode), scans your proj
 
 ---
 
-## MCP Tools (24)
+## MCP Tools (25)
 
-NeuralTree's MCP server provides 24 tools across 7 categories:
+NeuralTree's MCP server provides 25 tools across 8 categories:
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -92,6 +92,7 @@ NeuralTree's MCP server provides 24 tools across 7 categories:
 | | `neuraltree_update_calibration` | Update prediction model accuracy from real outcomes |
 | **Semantic** | `neuraltree_precision` | Search Viking + retrieve content — Claude judges relevance externally |
 | | `neuraltree_viking_index` | Batch-index local files into Viking semantic search |
+| **Knowledge Map** | `neuraltree_knowledge_map` | Generate a structured map of project knowledge topology |
 | **Sandbox** | `neuraltree_sandbox_create` | Create isolated git worktree for safe experimentation |
 | | `neuraltree_sandbox_diff` | Compare sandbox changes against original |
 | | `neuraltree_sandbox_apply` | Promote sandbox changes to the real project |
@@ -230,7 +231,7 @@ NeuralTree automatically detects the right mode based on your project's state:
 ### Run tests
 
 ```bash
-# Full test suite (306 tests)
+# Full test suite (345 tests)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Quick smoke test
@@ -260,10 +261,10 @@ PYTHONPATH=src python3.11 -m neuraltree_mcp.server
 neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
-│   │   ├── server.py            Entry point — registers all 22 tools
+│   │   ├── server.py            Entry point — registers all 25 tools
 │   │   ├── validation.py        Path traversal prevention
 │   │   ├── text_utils.py        Shared utilities
-│   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson, reorganize
+│   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson, reorganize, knowledge_map, precision, viking_index
 │   │   ├── scoring/             score, diagnose, predict, update_calibration
 │   │   └── sandbox/             sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 │   └── skill/

@@ -1,36 +1,47 @@
 ---
 name: neuraltree
 description: >
-  Universal neural organization — transforms any project into a structured
-  information system where any fact is reachable in 0-2 hops.
-version: 0.2.0
+  Universal neural organization — explores, maps, and reorganizes project
+  knowledge so any fact is reachable in 0-2 hops.
+version: 2.0.0
 tools_required:
-  - neuraltree-mcp (24 tools — includes Viking search + LLM judge integration)
+  - neuraltree-mcp (25 tools — includes Viking search + knowledge map)
 ---
 
-# /neuraltree — Universal Neural Organization Skill
+# /neuraltree — Universal Neural Organization Skill v2
 
 > You are the brain. neuraltree-mcp is the muscle. Viking is the memory.
-> Your job: orchestrate them to make information FLOW.
+> Your job: UNDERSTAND first, then organize.
 
 ## How This Skill Works
 
-This file is the **router**. It contains activation, principles, and the pipeline flow.
-Detailed step-by-step instructions for each phase live in `sections/` files — read them
-on demand as you reach each phase. This keeps context lean (~400 lines always loaded
-instead of ~2,200).
+This file is the **router**. Detailed instructions for each phase live in
+`sections/` files — read them on demand as you reach each phase.
 
 ```
-SKILL.md (this file)          — always loaded: activation + principles + routing
-sections/benchmark.md         — Phase 2: queries + precision + score
-sections/diagnose.md          — Phase 3: classify failures + priority queue
-sections/autoloop.md          — Phase 4: Karpathy-style fix loop
-sections/enforce.md           — Phase 5: persist gains + re-index
-sections/report.md            — Output: metric table + pending actions
-sections/edge-cases.md        — Error recovery + bootstrap edge cases
+SKILL.md (this file)        — always loaded: activation + principles + routing
+sections/explore.md         — Phase 1: parallel agent exploration
+sections/map.md             — Phase 2: knowledge map synthesis
+sections/analyze.md         — Phase 3: Claude-driven issue analysis
+sections/plan.md            — Phase 4: reorganization proposals
+sections/execute.md         — Phase 5: sandbox execution
+sections/verify.md          — Phase 6: adaptive scoring verification
+sections/report.md          — Output: before/after comparison
 ```
 
 **At each phase boundary, read the next section file and execute it.**
+
+---
+
+## v1 vs v2 — What Changed
+
+| v1 (metric-driven) | v2 (understanding-first) |
+|--------------------|--------------------------|
+| Score first, fix what formula says | Explore first, understand, then fix |
+| Hardcoded weights (0.25, 0.20...) | Adaptive thresholds from project shape |
+| Single-threaded autoloop | Parallel explorer agents (2-10) |
+| Keyword Jaccard similarity | Deep reading + concept clustering |
+| No knowledge map | Persistent dual-layer knowledge map |
 
 ---
 
@@ -47,17 +58,10 @@ These are operations you perform directly (not MCP tools). Use your native capab
 | `wait_for_user_input()` | Ask the user and wait for response. |
 | `release_lock()` | Delete `.neuraltree/.lock`. |
 | `now_iso8601()` / `today_iso8601()` | Current datetime/date in ISO 8601. |
-| `parse_iso(timestamp)` / `timedelta(days=N)` | Date parsing and arithmetic. |
-| `read_calibration_accuracy(path)` | Read `.neuraltree/calibration.json`, return `accuracy` (default 0.5). |
-| `git_log_modified_files(since)` | Run `git log --name-only --since={since}`, deduplicate. |
-| `is_knowledge_file(path)` | True if `.md` in `memory/`, `docs/`, or has frontmatter. |
-| `summarize_fixes(kept_list)` | Count fix types: `["wire: 2", "index: 1"]`. |
-
-> **Note:** Code blocks use Python-like pseudocode for clarity. Use your platform's equivalent operations.
 
 ---
 
-## MCP Tools Reference (24 tools)
+## MCP Tools Reference (25 tools)
 
 | Category | Tools |
 |----------|-------|
@@ -65,75 +69,14 @@ These are operations you perform directly (not MCP tools). Use your native capab
 | Intelligence | `neuraltree_wire`, `neuraltree_generate_queries` |
 | Reorganize | `neuraltree_plan_move`, `neuraltree_plan_split`, `neuraltree_find_dead`, `neuraltree_generate_index`, `neuraltree_shrink_and_wire`, `neuraltree_split_and_wire` |
 | Lessons | `neuraltree_lesson_match`, `neuraltree_lesson_add` |
-| Scoring | `neuraltree_score`, `neuraltree_diagnose`, `neuraltree_predict`, `neuraltree_update_calibration` |
-| Semantic | `neuraltree_precision` (Viking + LLM judge), `neuraltree_viking_index` (batch indexing) |
+| Scoring | `neuraltree_score` (with adaptive mode), `neuraltree_diagnose`, `neuraltree_predict`, `neuraltree_update_calibration` |
+| Semantic | `neuraltree_precision`, `neuraltree_viking_index` |
+| Knowledge Map | `neuraltree_knowledge_map` (save/load/query) |
 | Sandbox | `neuraltree_sandbox_create`, `neuraltree_sandbox_diff`, `neuraltree_sandbox_apply`, `neuraltree_sandbox_destroy` |
 
 ---
 
-## Section 1: Activation
-
-When `/neuraltree` is invoked, execute these five steps in order.
-
-### Step 1: Verify Tools
-
-1. **neuraltree-mcp** — call `neuraltree_scan(path=".", max_files=10000)`.
-   - Returns file inventory: **PASS**. Record `total_count`.
-   - Errors: **ABORT**. Print: `FATAL: neuraltree-mcp is not available.`
-
-2. **Viking** — call `neuraltree_precision(queries=[{"text":"test"}], project_root=".")`.
-   - `viking_available` true: **PASS**. Claude judges relevance (no external LLM needed).
-   - Viking unavailable: set `DEGRADED_MODE = true`. Print warning. Continue (scoring capped at 0.75).
-
-### Step 2: Detect Mode
-
-Read `.neuraltree/state.json` (Skill-owned, not MCP-managed).
-
-| Condition | Mode | Pipeline |
-|-----------|------|----------|
-| No `state.json` | **bootstrap** | Benchmark → Diagnose → AutoLoop (sandbox) → Enforce |
-| `flow_score < 0.60` | **critical** | Benchmark → Diagnose → AutoLoop (sandbox) → Enforce |
-| `last_run > 7 days` | **health-check** | Benchmark → Diagnose → Fix if degraded → Enforce |
-| `flow_score > 0.90`, recent | **spot-check** | Benchmark (critical queries only) |
-| Everything else | **maintenance** | Benchmark → Diagnose → Enforce |
-
-Priority: bootstrap(1) > critical(2) > health-check(3) > spot-check(4) > maintenance(5).
-
-### Step 3: Acquire Lock
-
-Lock file: `.neuraltree/.lock` (contains ISO 8601 timestamp).
-
-- Exists and < 1 hour: **ABORT** (another run active).
-- Exists and > 1 hour: auto-remove (stale lock from crash).
-- **ALL exit paths MUST release the lock** (try/finally pattern).
-
-After acquiring: clean previous backup, start timer, derive project name.
-
-### Step 4: Handle Subcommands
-
-| Subcommand | Pipeline |
-|------------|----------|
-| `/neuraltree audit` | Benchmark only (read-only) |
-| `/neuraltree fix` | Diagnose → AutoLoop (use last score) |
-| `/neuraltree enforce` | Enforce only |
-| `/neuraltree benchmark` | Full Benchmark report |
-| `/neuraltree auto` | Full pipeline (ignore mode) |
-| `/neuraltree` | Mode-detected pipeline |
-
-Subcommand overrides mode. For `enforce` and `fix`, load baseline from last run's `state.json`.
-
-### Step 5: Emit Status
-
-```
-/neuraltree — Activation Complete
-Mode: {mode} | Pipeline: {pipeline} | ETA: ~{duration}
-Tools: neuraltree-mcp ✓ ({file_count} files) | viking: ✓|DEGRADED | judge: Claude (sequential-thinking)
-Lock: acquired | State: {exists|new} (score: {N.NN})
-```
-
----
-
-## Section 2: The Artery Principle
+## The Artery Principle
 
 > "It's NOT about disk space. It's about FLOW."
 
@@ -141,61 +84,88 @@ Lock: acquired | State: {exists|new} (score: {N.NN})
 
 **1. Synapse Quality** — Every `## Related` link must lead somewhere alive and useful. Dead links waste hops.
 
-**2. Hop Synergy** — Three layers: trunk (MEMORY.md, CLAUDE.md) → branch (_INDEX.md) → leaf (topic files). Each hop adds specificity. Trunk directs, branch lists, leaf tells.
+**2. Hop Synergy** — Three layers: trunk (MEMORY.md, CLAUDE.md) → branch (_INDEX.md) → leaf (topic files). Each hop adds specificity.
 
 **3. Electrical Flow** — `## Related` links fire toward the 2-4 files that **complete the thought**, not everything tangentially related.
 
-**4. Trunk Pressure** — >100 lines in a trunk file = pressure drops. Trunk files are indexes, not content.
-
-### The 0-1-2 Hop Rule
-
-| Hop | What's Reachable | Examples |
-|-----|------------------|---------|
-| 0 | Always in context | MEMORY.md, CLAUDE.md, rules/, .neuraltree/state.json |
-| 1 | One tool call | _INDEX.md files, `neuraltree_scan()`, Viking search, Grep/Glob |
-| 2 | Two tool calls | Leaf files via index → read, `neuraltree_trace()` → read |
-| 3+ | **BROKEN** — treat as critical gap | Missing index, missing wiring, missing embedding |
-
-### Perfect Neuron Format
-
-```markdown
----
-name: [topic]
-description: [one-line summary]
-type: [user | feedback | project | reference]
-last_verified: [YYYY-MM-DD]
----
-
-[Content — 20-80 lines, single topic]
-
-## Related
-- [other.md](path) — why these fire together
-
-## Docs
-- `path/to/source.py` — what it implements
-```
+**4. Trunk Pressure** — Trunk files are indexes, not content. Keep them lean.
 
 ### Decision Rules
 
-1. **Cleanup is a side effect, not the goal.** Measure flow first. Only intervene where flow is broken.
+1. **Understand before fixing.** Explore and map first. Only intervene where the map shows a problem.
 2. **Trace before prune.** NEVER delete without calling `neuraltree_trace()` first.
 3. **Show both sides.** Reports show KEPT and DELETED/CHANGED with proof.
 4. **User approves destructive actions.** Wiring/indexing = auto. Deletes/moves/splits = ask.
 
 ---
 
-## Section 3: Progress Protocol
+## Section 1: Activation
 
-Emit status at every phase boundary: `Phase {n}/{total}: {action}... {metric}`
+When `/neuraltree` is invoked, execute these steps in order.
 
-| Mode | ETA |
-|------|-----|
-| spot-check | ~30s |
-| health-check | ~1-3 min |
-| maintenance | ~3-5 min |
-| bootstrap/critical | ~8-15 min |
+### Step 1: Verify Tools
 
-Phase denominators adjust per subcommand (audit=2, fix=3, enforce=1, auto/default=5).
+1. **neuraltree-mcp** — call `neuraltree_scan(path=".", max_files=10000)`.
+   - Returns file inventory: **PASS**. Record `total_count`, `files`, `dirs`.
+   - Errors: **ABORT**. Print: `FATAL: neuraltree-mcp is not available.`
+
+2. **Viking** — call `neuraltree_precision(queries=[{"text":"test"}], project_root=".")`.
+   - `viking_available` true: **PASS**.
+   - Viking unavailable: set `DEGRADED_MODE = true`. Print warning. Continue.
+
+### Step 2: Detect Mode
+
+Read `.neuraltree/knowledge_map.json` and `.neuraltree/state.json`.
+
+| Condition | Mode | Pipeline |
+|-----------|------|----------|
+| No knowledge map | **full** | Explore → Map → Analyze → Plan → Execute → Verify |
+| Map exists, stale (>7 days) | **refresh** | Explore → Map → Analyze → Plan → Execute → Verify |
+| Map exists, recent, score < 0.60 | **fix** | Analyze → Plan → Execute → Verify |
+| Map exists, recent, score >= 0.60 | **check** | Verify only (quick re-score) |
+
+### Step 3: Determine Agent Count
+
+Scale exploration to project size:
+
+```
+knowledge_files = [f for f in scan_result["files"]
+                   if f.endswith((".md", ".txt"))
+                   and not f.startswith((".pytest_cache/", ".ruff_cache/"))]
+total_kb_files = len(knowledge_files)
+
+if total_kb_files < 30:       agent_count = 2
+elif total_kb_files < 100:    agent_count = 3
+elif total_kb_files < 300:    agent_count = 5
+elif total_kb_files < 1000:   agent_count = 7
+else:                         agent_count = 10
+```
+
+### Step 4: Acquire Lock + Emit Status
+
+Lock file: `.neuraltree/.lock` (contains ISO 8601 timestamp).
+- Exists and < 1 hour: **ABORT** (another run active).
+- Exists and > 1 hour: auto-remove (stale lock from crash).
+- **ALL exit paths MUST release the lock** (try/finally pattern).
+
+```
+/neuraltree — Activation Complete
+Mode: {mode} | Agents: {agent_count} | Files: {total_kb_files}
+Tools: neuraltree-mcp ✓ (25 tools) | Viking: ✓|DEGRADED
+Pipeline: {phase_list}
+```
+
+### Step 5: Handle Subcommands
+
+| Subcommand | Pipeline |
+|------------|----------|
+| `/neuraltree` | Mode-detected pipeline |
+| `/neuraltree explore` | Explore + Map only |
+| `/neuraltree analyze` | Analyze only (uses existing map) |
+| `/neuraltree fix` | Analyze → Plan → Execute → Verify |
+| `/neuraltree verify` | Verify only (quick re-score) |
+| `/neuraltree map` | Show knowledge map summary |
+| `/neuraltree auto` | Full pipeline regardless of mode |
 
 ---
 
@@ -203,30 +173,44 @@ Phase denominators adjust per subcommand (audit=2, fix=3, enforce=1, auto/defaul
 
 **After activation completes, execute phases by reading section files in order.**
 
-### Phase 2: Benchmark
-**Read `sections/benchmark.md` and execute all steps.**
-Generates queries, measures Precision@3 via `neuraltree_precision`, computes structural metrics, assembles Flow Score.
+### Phase 1: Explore
+**Read `sections/explore.md` and execute all steps.**
+Launch N explorer agents in parallel. Each reads a directory slice deeply.
+Reports: per-file metadata, per-directory assessment, cross-references found.
 
-### Phase 3: Diagnose
-**Read `sections/diagnose.md` and execute all steps.**
-Classifies failed queries by gap type, enriches with dead neurons and lessons, builds priority queue.
-*Skip if no failures (all queries passed).*
+### Phase 2: Map
+**Read `sections/map.md` and execute all steps.**
+Synthesize explorer reports into dual-layer knowledge map.
+Layer 1: file graph (nodes + edges). Layer 2: concept clusters.
+Save to `.neuraltree/knowledge_map.json`.
 
-### Phase 4: AutoLoop
-**Read `sections/autoloop.md` and execute all steps.**
-Karpathy-style loop: analyze → propose → backup → execute → measure → keep/discard → learn → repeat.
-*Skip if no failures.*
+### Phase 3: Analyze
+**Read `sections/analyze.md` and execute all steps.**
+Claude reads the knowledge map and REASONS about what's wrong.
+No formulas — understanding-driven issue identification.
+Output: issues list with severity + proposed fixes.
+*Skip if no issues found in map.*
 
-### Phase 5: Enforce
-**Read `sections/enforce.md` and execute all steps.**
-Graduate queries, compress history, update state.json, re-index Viking, install org rule, cleanup.
+### Phase 4: Plan
+**Read `sections/plan.md` and execute all steps.**
+Convert issues into concrete actions. Trace before destructive changes.
+Show user: "Here's what I'd change and why." User approves per-item.
+*Skip if no issues.*
+
+### Phase 5: Execute
+**Read `sections/execute.md` and execute all steps.**
+Apply approved changes in sandbox. Wire new/moved files. Re-index Viking.
+Verify no broken references.
+*Skip if no approved actions.*
+
+### Phase 6: Verify
+**Read `sections/verify.md` and execute all steps.**
+Score with adaptive mode. Compare before/after.
+Score VALIDATES the changes — it doesn't drive them.
 
 ### Report
 **Read `sections/report.md` and execute.**
-Emit metric table, action lists, handle pending user approvals.
-
-### Edge Cases
-**Read `sections/edge-cases.md` when encountering:** no CLAUDE.md, no git, empty project, monorepo, concurrent runs, service failures, scale limits.
+Before/after comparison. Knowledge map summary. Action log.
 
 ---
 

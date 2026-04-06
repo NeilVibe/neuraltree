@@ -1,6 +1,7 @@
 """neuraltree_score — Compute structural metrics and Flow Score."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -55,9 +56,90 @@ def _parse_last_verified(content: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _compute_freshness(file_contents: dict[Path, str], md_files: list[Path], root: Path, window_days: int = 30) -> tuple[int, list[str]]:
+    """Compute freshness metric: % of files with last_verified within window."""
+    now = datetime.now(tz=timezone.utc)
+    fresh_count = 0
+    stale_files: list[str] = []
+    for md_file in md_files:
+        content = file_contents.get(md_file)
+        if content is None:
+            stale_files.append(os.path.relpath(md_file, root))
+            continue
+        date_str = _parse_last_verified(content)
+        if date_str:
+            try:
+                verified = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                if (now - verified).days <= window_days:
+                    fresh_count += 1
+                else:
+                    stale_files.append(os.path.relpath(md_file, root))
+            except ValueError:
+                stale_files.append(os.path.relpath(md_file, root))
+    return fresh_count, stale_files
+
+
+def _load_knowledge_map(root: Path) -> dict | None:
+    """Load .neuraltree/knowledge_map.json if it exists.
+
+    Returns None if the file doesn't exist, or {"error": "corrupt"} if it
+    exists but cannot be parsed.
+    """
+    km_path = root / ".neuraltree" / "knowledge_map.json"
+    if not km_path.exists():
+        return None
+    try:
+        return json.loads(km_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return {"error": f"corrupt: {e}"}
+    except OSError as e:
+        return {"error": f"unreadable: {e}"}
+
+
+def _derive_adaptive_thresholds(knowledge_map: dict) -> dict:
+    """Derive adaptive thresholds from knowledge map stats.
+
+    Returns dict with trunk_cap, file_size_cap, freshness_days, and source metadata.
+    """
+    stats = knowledge_map.get("stats", {})
+    total_files = stats.get("total_files", 0)
+    avg_file_size = stats.get("avg_file_size", 0)
+    max_depth = stats.get("max_depth", 2)
+
+    # trunk_cap: base 100, +25 per 100 files, max 300
+    trunk_cap = min(300, 100 + 25 * (total_files // 100))
+
+    # file_size_cap: 2x project avg, min 200, max 800
+    file_size_cap = max(200, min(800, int(avg_file_size * 2)))
+
+    # freshness_days: base 30, +10 per depth level beyond 2
+    extra_depth = max(0, max_depth - 2)
+    freshness_days = 30 + 10 * extra_depth
+
+    return {
+        "trunk_cap": trunk_cap,
+        "file_size_cap": file_size_cap,
+        "freshness_days": freshness_days,
+        "source": "knowledge_map",
+        "total_files": total_files,
+        "avg_file_size": avg_file_size,
+        "max_depth": max_depth,
+    }
+
+
+def _compute_adaptive_trunk_pressure(trunk_lines: int, trunk_cap: int) -> float:
+    """Compute trunk pressure using adaptive cap."""
+    if trunk_lines < trunk_cap * 0.8:
+        return 1.0
+    elif trunk_lines < trunk_cap:
+        return 0.8
+    else:
+        return 0.3
+
+
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    def neuraltree_score(project_root: str = ".", trunk_paths: list[str] | None = None) -> dict:
+    def neuraltree_score(project_root: str = ".", trunk_paths: list[str] | None = None, adaptive: bool = False) -> dict:
         """Compute 4 structural metrics + trunk pressure for the neural tree.
 
         Metrics computed (0.0 - 1.0 each):
@@ -73,10 +155,12 @@ def register(mcp: FastMCP) -> None:
         Args:
             project_root: Project root directory.
             trunk_paths: Paths to trunk files (MEMORY.md, CLAUDE.md). Auto-detected if None.
+            adaptive: If True, derive thresholds from .neuraltree/knowledge_map.json
+                      instead of using hardcoded values.
 
         Returns:
             dict with individual metrics, flow_score (partial, without precision_at_3),
-            and details for each metric.
+            and details for each metric. When adaptive=True, includes adaptive_context.
         """
         try:
             root = validate_project_root(project_root)
@@ -196,26 +280,7 @@ def register(mcp: FastMCP) -> None:
         dead_neuron_ratio = 1.0 - (len(orphans) / max(len(all_contents), 1))
 
         # --- Freshness ---
-        now = datetime.now(tz=timezone.utc)
-        fresh_count = 0
-        stale_files = []
-
-        for md_file in md_files:
-            content = file_contents.get(md_file)
-            if content is None:
-                continue
-            date_str = _parse_last_verified(content)
-            if date_str:
-                try:
-                    verified = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                    if (now - verified).days <= FRESHNESS_WINDOW_DAYS:
-                        fresh_count += 1
-                    else:
-                        stale_files.append(os.path.relpath(md_file, root))
-                except ValueError:
-                    stale_files.append(os.path.relpath(md_file, root))
-            # Files without last_verified are not counted as fresh
-
+        fresh_count, stale_files = _compute_freshness(file_contents, md_files, root, FRESHNESS_WINDOW_DAYS)
         freshness = fresh_count / max(total_md, 1)
 
         # --- Trunk Pressure ---
@@ -228,12 +293,55 @@ def register(mcp: FastMCP) -> None:
                 except OSError as e:
                     warnings.append(f"Could not read trunk {tp}: {e}")
 
-        if trunk_lines < 80:
-            trunk_pressure = 1.0
-        elif trunk_lines < 100:
-            trunk_pressure = 0.8
+        # --- Adaptive mode: derive thresholds from knowledge map ---
+        adaptive_context: dict | None = None
+        trunk_pressure: float = 0.3  # safe default before branching logic
+        if adaptive:
+            knowledge_map = _load_knowledge_map(root)
+            if knowledge_map is not None and "error" not in knowledge_map:
+                thresholds = _derive_adaptive_thresholds(knowledge_map)
+                trunk_pressure = _compute_adaptive_trunk_pressure(trunk_lines, thresholds["trunk_cap"])
+                # Override freshness window for adaptive freshness recomputation
+                adaptive_freshness_days = thresholds["freshness_days"]
+                if adaptive_freshness_days != FRESHNESS_WINDOW_DAYS:
+                    fresh_count, stale_files = _compute_freshness(file_contents, md_files, root, adaptive_freshness_days)
+                    freshness = fresh_count / max(total_md, 1)
+                adaptive_context = {
+                    "source": "knowledge_map",
+                    "thresholds": {
+                        "trunk_cap": thresholds["trunk_cap"],
+                        "file_size_cap": thresholds["file_size_cap"],
+                        "freshness_days": thresholds["freshness_days"],
+                    },
+                    "derived_from": {
+                        "total_files": thresholds["total_files"],
+                        "avg_file_size": thresholds["avg_file_size"],
+                        "max_depth": thresholds["max_depth"],
+                    },
+                }
+            else:
+                # No knowledge map or corrupt — fall back to static thresholds
+                if knowledge_map is None:
+                    reason = "no knowledge_map"
+                else:
+                    err_msg = knowledge_map.get("error", "")
+                    reason = "unreadable knowledge_map" if err_msg.startswith("unreadable") else "corrupt knowledge_map"
+                adaptive_context = {"source": "static", "reason": reason}
+                # Use standard static trunk pressure
+                if trunk_lines < 80:
+                    trunk_pressure = 1.0
+                elif trunk_lines < 100:
+                    trunk_pressure = 0.8
+                else:
+                    trunk_pressure = 0.3
         else:
-            trunk_pressure = 0.3
+            # Static mode (default) — hardcoded thresholds
+            if trunk_lines < 80:
+                trunk_pressure = 1.0
+            elif trunk_lines < 100:
+                trunk_pressure = 0.8
+            else:
+                trunk_pressure = 0.3
 
         # --- Flow Score (partial — without precision_at_3) ---
         metrics = {
@@ -252,7 +360,7 @@ def register(mcp: FastMCP) -> None:
             if metrics[k] is not None
         )
 
-        return {
+        result = {
             "metrics": metrics,
             "flow_score_partial": round(partial_flow, 3),
             "flow_score_weights": WEIGHTS,
@@ -266,3 +374,8 @@ def register(mcp: FastMCP) -> None:
             },
             "warnings": warnings,
         }
+
+        if adaptive_context is not None:
+            result["adaptive_context"] = adaptive_context
+
+        return result
