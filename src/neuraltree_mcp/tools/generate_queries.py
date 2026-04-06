@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 from pathlib import Path
 
 from fastmcp import FastMCP
 
-from neuraltree_mcp.text_utils import NON_LESSON_HEADINGS
 from neuraltree_mcp.validation import validate_project_root, validate_within_root
 
 # Max queries per individual strategy to prevent any single source from dominating
@@ -96,43 +94,6 @@ def _parse_headings(content: str) -> list[str]:
     return topics
 
 
-def _parse_generic_table_values(content: str) -> list[str]:
-    """Extract first-column values from ALL markdown tables.
-
-    Unlike _parse_table_column which requires a specific header,
-    this finds every table and extracts meaningful first-column values.
-    Skips tables already handled (Term, Need headers) and generic values.
-    """
-    skip_values = {"", "---", "category", "term", "need", "command", "flag", "option"}
-    already_handled_headers = {"Term", "Need"}
-    values = []
-    in_table = False
-    skip_this_table = False
-
-    for line in content.splitlines():
-        stripped = line.strip()
-        if "|" in stripped and not in_table:
-            # Check if this is a table header we already handle
-            if any(h in stripped for h in already_handled_headers):
-                skip_this_table = True
-            else:
-                skip_this_table = False
-            in_table = True
-            continue
-        if in_table:
-            if stripped.startswith("|---") or stripped.startswith("| ---"):
-                continue
-            if "|" in stripped and not skip_this_table:
-                cells = [c.strip() for c in stripped.split("|")]
-                cells = [c for c in cells if c]
-                if cells:
-                    val = cells[0].strip("`*").strip()
-                    if val.lower() not in skip_values and 4 <= len(val) <= 80:
-                        values.append(val)
-            elif "|" not in stripped:
-                in_table = False
-                skip_this_table = False
-    return values
 
 
 def _parse_bold_terms(content: str) -> list[str]:
@@ -183,27 +144,24 @@ def register(mcp: FastMCP) -> None:
         claude_md_path: str | None = None,
         memory_md_path: str | None = None,
         index_paths: list[str] | None = None,
-        git_log_lines: int = 100,
         indexed_doc_count: int = 30,
     ) -> dict:
         """Auto-generate test queries from project context.
 
-        Uses 8 strategies:
+        Uses 5 strategies (all produce queries Viking can actually answer):
         1. CLAUDE.md glossary tables -> "What is {term}?"
         2. CLAUDE.md nav tables -> "How does {topic} work?"
-        2b. CLAUDE.md headings (fallback) -> "How does {heading} work?"
-        2c. CLAUDE.md bold terms (fallback) -> "What is {term}?"
-        3. MEMORY.md links -> "What do we know about {title}?"
-        3b. MEMORY.md headings (fallback) -> "What do we know about {heading}?"
+        2b. CLAUDE.md headings -> "How does {heading} work?"
+        2c. CLAUDE.md bold terms -> "What is {term}?"
+        3. MEMORY.md links/headings -> "What do we know about {title}?"
         4. _INDEX.md entries -> "Where is {topic} documented?"
-        5. git log subjects -> "What changed with {noun}?"
+        5. README.md headings -> "How does {heading} work?"
 
         Args:
             project_root: Project root directory.
             claude_md_path: Relative path to CLAUDE.md (auto-detected if None).
             memory_md_path: Relative path to MEMORY.md (auto-detected if None).
             index_paths: Relative paths to _INDEX.md files (auto-discovered if None).
-            git_log_lines: Number of git log lines to parse.
             indexed_doc_count: Estimated indexed docs (for query count scaling).
 
         Returns:
@@ -215,9 +173,6 @@ def register(mcp: FastMCP) -> None:
             return {"queries": [], "sources": {}, "total": 0, "warnings": [], "error": str(e)}
         queries: list[dict] = []
         warnings: list[str] = []
-
-        # Clamp git_log_lines
-        git_log_lines = max(1, min(git_log_lines, 500))
 
         # Target query count: scale with project size, generous cap
         # Small projects (~30 files): 30, medium (~100): 50, large (200+): 75
@@ -245,13 +200,6 @@ def register(mcp: FastMCP) -> None:
                 needs = _parse_table_column(claude_content, "Need", 0)
                 for need in needs[:_MAX_PER_STRATEGY]:
                     queries.append({"text": f"How does {need} work?", "source": "claude_md", "category": "how_does"})
-                    claude_count += 1
-
-                # Strategy 2a: Generic table first-column extraction
-                # Catches tables with any header (Category|Tools, Command|Description, etc.)
-                generic_values = _parse_generic_table_values(claude_content)
-                for val in generic_values[:_MAX_PER_STRATEGY]:
-                    queries.append({"text": f"How does {val} work?", "source": "claude_md", "category": "how_does"})
                     claude_count += 1
 
                 # Strategy 2b: Headings (always run, not just fallback)
@@ -326,74 +274,7 @@ def register(mcp: FastMCP) -> None:
             except OSError as e:
                 warnings.append(f"Could not read {idx_file}: {e}")
 
-        # Strategy 5: Lesson symptoms (regression queries — higher value, run before git)
-        for lessons_candidate in ["memory/lessons", "lessons"]:
-            lessons_path = root / lessons_candidate
-            if lessons_path.is_dir():
-                try:
-                    lesson_files = sorted(lessons_path.iterdir())
-                except OSError as e:
-                    warnings.append(f"Could not list lessons directory {lessons_path}: {e}")
-                    continue
-                for lf in lesson_files:
-                    if not lf.name.endswith(".md") or lf.name == "_INDEX.md":
-                        continue
-                    try:
-                        lf_content = lf.read_text(encoding="utf-8", errors="replace")
-                        for line in lf_content.splitlines():
-                            if line.startswith("## "):
-                                heading = line[3:].strip()
-                                heading_lower = heading.lower().split("(")[0].strip()
-                                if heading_lower in NON_LESSON_HEADINGS:
-                                    continue
-                                # Strip date suffix for clean query text
-                                clean_heading = heading.split("(")[0].strip()
-                                queries.append({
-                                    "text": f"Has {clean_heading} recurred?",
-                                    "source": "lessons",
-                                    "category": "regression",
-                                })
-                    except OSError as e:
-                        warnings.append(f"Could not read lesson file {lf}: {e}")
-                break  # only use first found lessons dir
-
-        # Strategy 6: git log — extract commit SUBJECTS, not single words
-        _GIT_MAX = 8  # cap git queries to prevent domination
-        try:
-            result = subprocess.run(
-                ["git", "log", "--oneline", f"-{git_log_lines}"],
-                capture_output=True, text=True, cwd=str(root), timeout=10,
-            )
-            if result.returncode == 0:
-                skip_prefixes = ("chore:", "ci:", "merge", "version", "trigger", "initial")
-                git_count = 0
-                for line in result.stdout.splitlines():
-                    if git_count >= _GIT_MAX:
-                        break
-                    parts = line.split(maxsplit=1)
-                    if len(parts) < 2:
-                        continue
-                    subject = parts[1].lower()
-                    if any(subject.startswith(p) for p in skip_prefixes):
-                        continue
-                    # Strip conventional commit prefix: "feat: X" → "X"
-                    clean_subject = re.sub(
-                        r'^(feat|fix|refactor|docs|test|perf|build|style)(\([^)]*\))?[:\s]+',
-                        '', parts[1], flags=re.IGNORECASE,
-                    ).strip()
-                    # Only use subjects with enough substance (>10 chars)
-                    if len(clean_subject) > 10:
-                        queries.append({
-                            "text": f"What changed with {clean_subject}?",
-                            "source": "git", "category": "what_changed",
-                        })
-                        git_count += 1
-            else:
-                warnings.append(f"git log failed (exit {result.returncode}): {result.stderr.strip()}")
-        except (subprocess.SubprocessError, OSError) as e:
-            warnings.append(f"git log failed: {e}")
-
-        # Strategy 7: README.md headings
+        # Strategy 5: README.md headings
         readme_path = root / "README.md"
         if readme_path.exists():
             try:
@@ -413,7 +294,7 @@ def register(mcp: FastMCP) -> None:
             queries = queries[:target_count]
 
         # Recount sources from final query list (dedup/cap may have removed entries)
-        sources: dict[str, int] = {"claude_md": 0, "memory": 0, "indexes": 0, "lessons": 0, "git": 0, "readme": 0}
+        sources: dict[str, int] = {"claude_md": 0, "memory": 0, "indexes": 0, "readme": 0}
         for q in queries:
             src = q.get("source", "")
             if src in sources:

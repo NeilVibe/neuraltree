@@ -412,18 +412,6 @@ class TestLessonAddTool:
         assert "limit" in result.get("error", "").lower() or "exceed" in result.get("error", "").lower()
 
 
-class TestGenerateQueriesWithLessons:
-    def test_generates_regression_queries(self, tmp_project):
-        result = call_tool("neuraltree_generate_queries", {
-            "project_root": str(tmp_project),
-        })
-        assert "lessons" in result["sources"]
-        assert result["sources"]["lessons"] >= 3  # 2 from images.md + 1 from database.md
-        regression_queries = [q for q in result["queries"] if q["category"] == "regression"]
-        assert len(regression_queries) >= 1
-        assert any("recurred" in q["text"] for q in regression_queries)
-
-
 class TestSandboxApplyTool:
     def test_sandbox_apply_path_traversal_blocked(self, tmp_project):
         """Explicitly supplied paths should be blocked from escaping root."""

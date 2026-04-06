@@ -40,11 +40,10 @@ class TestBenchmarkPipeline:
         assert "CLAUDE.md" in result["files"]
 
     def test_generate_queries_newfin(self, newfin_project):
-        """Query generator should produce queries from a real CLAUDE.md + git log."""
+        """Query generator should produce queries from a real CLAUDE.md."""
         result = call_tool("neuraltree_generate_queries", {
             "project_root": str(newfin_project),
             "claude_md_path": str(newfin_project / "CLAUDE.md"),
-            "git_log_lines": 50,
             "indexed_doc_count": 30,
         })
         assert "error" not in result
