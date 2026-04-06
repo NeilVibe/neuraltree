@@ -1,0 +1,356 @@
+"""Integration tests for v2 knowledge map pipeline — save → load → query cycle."""
+import asyncio
+import json
+import pytest
+
+from neuraltree_mcp.server import mcp
+
+
+def call_tool(name: str, args: dict) -> dict:
+    """Helper to call an MCP tool synchronously and parse the result."""
+    result = asyncio.run(mcp.call_tool(name, args))
+    # FastMCP v3 returns a ToolResult with structured_content
+    if hasattr(result, 'structured_content') and result.structured_content is not None:
+        return result.structured_content
+    # Fallback: parse from content text blocks
+    if hasattr(result, 'content'):
+        for block in result.content:
+            if hasattr(block, 'text'):
+                return json.loads(block.text)
+    return result
+
+
+def _make_knowledge_map() -> dict:
+    """Build a minimal but complete knowledge map for testing."""
+    return {
+        "version": 2,
+        "timestamp": "2026-04-06T12:00:00Z",
+        "project_name": "mock_project",
+        "files": {
+            "CLAUDE.md": {
+                "path": "CLAUDE.md",
+                "topic": "Project instructions",
+                "key_concepts": ["architecture", "glossary"],
+                "references_to": ["memory/MEMORY.md"],
+                "referenced_by": [],
+                "size_lines": 10,
+                "issues": [],
+            },
+            "memory/MEMORY.md": {
+                "path": "memory/MEMORY.md",
+                "topic": "Memory trunk",
+                "key_concepts": ["rules", "reference"],
+                "references_to": [],
+                "referenced_by": ["CLAUDE.md"],
+                "size_lines": 5,
+                "issues": [],
+            },
+        },
+        "edges": [
+            {"source": "CLAUDE.md", "target": "memory/MEMORY.md", "type": "reference", "weight": 1.0},
+        ],
+        "clusters": [
+            {"name": "project_docs", "concept": "project documentation", "files": ["CLAUDE.md", "memory/MEMORY.md"]},
+        ],
+        "issues": [],
+        "stats": {
+            "total_files": 2,
+            "total_edges": 1,
+            "total_clusters": 1,
+            "total_issues": 0,
+            "avg_file_size": 7,
+            "max_depth": 1,
+        },
+    }
+
+
+class TestKnowledgeMapPipeline:
+    """Test the full save -> load -> query cycle via MCP tool."""
+
+    def test_save_returns_path_and_file_count(self, tmp_project):
+        km = _make_knowledge_map()
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        assert "saved" in result
+        assert result["files"] == 2
+        # saved is a path string, not a boolean
+        assert result["saved"].endswith("knowledge_map.json")
+
+    def test_save_creates_file_on_disk(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        km_path = tmp_project / ".neuraltree" / "knowledge_map.json"
+        assert km_path.exists()
+        loaded = json.loads(km_path.read_text())
+        assert loaded["version"] == 2
+        assert len(loaded["files"]) == 2
+
+    def test_load_returns_knowledge_map(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "load",
+            "project_root": str(tmp_project),
+        })
+        assert "knowledge_map" in result
+        assert len(result["knowledge_map"]["files"]) == 2
+        assert result["knowledge_map"]["project_name"] == "mock_project"
+
+    def test_load_when_no_map_exists(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "load",
+            "project_root": str(tmp_project),
+        })
+        assert "error" in result
+
+    def test_query_file(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "file_path": "CLAUDE.md",
+        })
+        assert result["path"] == "CLAUDE.md"
+        assert result["file"]["topic"] == "Project instructions"
+        assert "architecture" in result["file"]["key_concepts"]
+
+    def test_query_file_not_in_map(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "file_path": "nonexistent.md",
+        })
+        assert "error" in result
+
+    def test_query_neighbors(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "neighbors_of": "CLAUDE.md",
+        })
+        assert result["file"] == "CLAUDE.md"
+        neighbor_files = [n["file"] for n in result["neighbors"]]
+        assert "memory/MEMORY.md" in neighbor_files
+        # Verify direction is outbound (CLAUDE.md -> memory/MEMORY.md)
+        outbound = [n for n in result["neighbors"] if n["direction"] == "outbound"]
+        assert len(outbound) >= 1
+
+    def test_query_neighbors_reverse_direction(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "neighbors_of": "memory/MEMORY.md",
+        })
+        neighbor_files = [n["file"] for n in result["neighbors"]]
+        assert "CLAUDE.md" in neighbor_files
+        # Direction should be inbound (CLAUDE.md -> memory/MEMORY.md, queried from target)
+        inbound = [n for n in result["neighbors"] if n["direction"] == "inbound"]
+        assert len(inbound) >= 1
+
+    def test_query_cluster(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "cluster": "project_docs",
+        })
+        assert "cluster" in result
+        assert "CLAUDE.md" in result["cluster"]["files"]
+        assert "memory/MEMORY.md" in result["cluster"]["files"]
+        assert result["cluster"]["concept"] == "project documentation"
+
+    def test_query_cluster_not_found(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "cluster": "nonexistent_cluster",
+        })
+        assert "error" in result
+
+    def test_query_issues_only(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "issues_only": True,
+        })
+        assert "issues" in result
+        assert result["issues"] == []
+
+    def test_query_default_returns_stats(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+        })
+        assert "stats" in result
+        assert result["stats"]["total_files"] == 2
+        assert result["version"] == 2
+        assert result["project_name"] == "mock_project"
+
+    def test_save_without_knowledge_map_errors(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+        })
+        assert "error" in result
+
+    def test_unknown_action_errors(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "explode",
+            "project_root": str(tmp_project),
+        })
+        assert "error" in result
+        assert "explode" in result["error"]
+
+    def test_query_no_map_errors(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "query",
+            "project_root": str(tmp_project),
+            "file_path": "CLAUDE.md",
+        })
+        assert "error" in result
+
+
+class TestAdaptiveScoreWithKnowledgeMap:
+    """Score with adaptive=True should read the knowledge map."""
+
+    def test_adaptive_score_uses_knowledge_map(self, tmp_project):
+        from neuraltree_mcp.tools.knowledge_map import _save_map
+
+        km = {
+            "version": 2,
+            "files": {f"file_{i}.md": {"size_lines": 50} for i in range(50)},
+            "edges": [],
+            "clusters": [],
+            "stats": {"total_files": 50, "total_edges": 0, "avg_file_size": 50, "max_depth": 1},
+        }
+        _save_map(km, str(tmp_project))
+
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project),
+            "adaptive": True,
+        })
+        assert "adaptive_context" in result
+        assert result["adaptive_context"]["source"] == "knowledge_map"
+
+    def test_adaptive_score_without_map_falls_back(self, tmp_project):
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project),
+            "adaptive": True,
+        })
+        assert "adaptive_context" in result
+        assert result["adaptive_context"]["source"] == "static"
+
+
+class TestKnowledgeMapRoundTrip:
+    """Verify data integrity through save → load round-trips."""
+
+    def test_round_trip_preserves_all_fields(self, tmp_project):
+        km = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km,
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "load",
+            "project_root": str(tmp_project),
+        })
+        loaded = result["knowledge_map"]
+        assert loaded["version"] == km["version"]
+        assert loaded["timestamp"] == km["timestamp"]
+        assert loaded["project_name"] == km["project_name"]
+        assert loaded["files"] == km["files"]
+        assert loaded["edges"] == km["edges"]
+        assert loaded["clusters"] == km["clusters"]
+        assert loaded["issues"] == km["issues"]
+        assert loaded["stats"] == km["stats"]
+
+    def test_overwrite_replaces_previous_map(self, tmp_project):
+        km1 = _make_knowledge_map()
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km1,
+        })
+
+        km2 = _make_knowledge_map()
+        km2["project_name"] = "updated_project"
+        km2["files"]["new_file.md"] = {
+            "path": "new_file.md",
+            "topic": "New content",
+            "key_concepts": [],
+            "references_to": [],
+            "referenced_by": [],
+            "size_lines": 3,
+            "issues": [],
+        }
+        call_tool("neuraltree_knowledge_map", {
+            "action": "save",
+            "project_root": str(tmp_project),
+            "knowledge_map": km2,
+        })
+
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "load",
+            "project_root": str(tmp_project),
+        })
+        loaded = result["knowledge_map"]
+        assert loaded["project_name"] == "updated_project"
+        assert len(loaded["files"]) == 3
