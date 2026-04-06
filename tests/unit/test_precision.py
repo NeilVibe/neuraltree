@@ -6,6 +6,7 @@ import pytest
 
 from neuraltree_mcp.tools.precision import (
     _check_viking,
+    _source_doc,
     _viking_read,
     _viking_search,
     register,
@@ -127,15 +128,81 @@ class TestVikingSearch:
             mock_req.post.return_value = mock_response
             _viking_search("http://localhost:1933", "test", 3, project_name="myproject")
             call_args = mock_req.post.call_args
-            assert call_args[1]["json"]["limit"] == 9  # 3 * 3
+            assert call_args[1]["json"]["limit"] == 30  # 3 * 10
+
+
+    def test_deduplicates_by_source_doc(self):
+        """Multiple chunks from same source doc should be deduped to best one."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    {"uri": "viking://resources/proj/CLAUDE.md/chunk1.md", "score": 0.9, "abstract": ""},
+                    {"uri": "viking://resources/proj/CLAUDE.md/chunk2.md", "score": 0.85, "abstract": ""},
+                    {"uri": "viking://resources/proj/CLAUDE.md/chunk3.md", "score": 0.8, "abstract": ""},
+                    {"uri": "viking://resources/proj/README.md/chunk1.md", "score": 0.7, "abstract": ""},
+                    {"uri": "viking://resources/proj/lessons.md/chunk1.md", "score": 0.6, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name="proj")
+            assert len(results) == 3
+            # Should be one from each source doc, not 3 from CLAUDE.md
+            uris = [r["uri"] for r in results]
+            assert "viking://resources/proj/CLAUDE.md/chunk1.md" in uris  # best chunk
+            assert "viking://resources/proj/README.md/chunk1.md" in uris
+            assert "viking://resources/proj/lessons.md/chunk1.md" in uris
+
+    def test_dedup_keeps_highest_score(self):
+        """Dedup should keep the highest-scoring chunk per source doc."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    {"uri": "viking://resources/proj/A.md/chunk2.md", "score": 0.95, "abstract": ""},
+                    {"uri": "viking://resources/proj/A.md/chunk1.md", "score": 0.5, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name="proj")
+            assert len(results) == 1
+            assert results[0]["score"] == 0.95
+
+
+class TestSourceDoc:
+    def test_extracts_source_doc(self):
+        uri = "viking://resources/neuraltree/CLAUDE.md/CLAUDEmd_NeuralTree/chunk.md"
+        assert _source_doc(uri) == "CLAUDE.md"
+
+    def test_extracts_from_deep_path(self):
+        uri = "viking://resources/neuraltree/docs_HANDOFF.md/Session/What_Was_Done.md"
+        assert _source_doc(uri) == "docs_HANDOFF.md"
+
+    def test_handles_short_uri(self):
+        uri = "viking://resources/proj"
+        result = _source_doc(uri)
+        assert isinstance(result, str)
 
 
 class TestVikingRead:
     def test_reads_content(self):
         mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {"result": "hello world"}
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.get.return_value = mock_response
+            content = _viking_read("http://localhost:1933", "viking://resources/a.md")
+            assert content == "hello world"
+
+    def test_reads_content_dict_format(self):
+        """Handles legacy dict format {result: {content: ...}} too."""
+        mock_response = MagicMock(status_code=200)
         mock_response.json.return_value = {"result": {"content": "hello world"}}
         with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
-            mock_req.post.return_value = mock_response
+            mock_req.get.return_value = mock_response
             content = _viking_read("http://localhost:1933", "viking://resources/a.md")
             assert content == "hello world"
 
@@ -143,7 +210,7 @@ class TestVikingRead:
         import requests
 
         with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
-            mock_req.post.side_effect = requests.Timeout()
+            mock_req.get.side_effect = requests.Timeout()
             mock_req.ConnectionError = requests.ConnectionError
             mock_req.Timeout = requests.Timeout
             mock_req.ValueError = ValueError
@@ -152,9 +219,9 @@ class TestVikingRead:
 
     def test_truncates_long_content(self):
         mock_response = MagicMock(status_code=200)
-        mock_response.json.return_value = {"result": {"content": "x" * 5000}}
+        mock_response.json.return_value = {"result": "x" * 5000}
         with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
-            mock_req.post.return_value = mock_response
+            mock_req.get.return_value = mock_response
             content = _viking_read("http://localhost:1933", "viking://resources/a.md")
             assert len(content) == 3000
 

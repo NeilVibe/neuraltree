@@ -1,6 +1,6 @@
 """NeuralTree MCP Server — The Muscle.
 
-25 tools for neural tree organization:
+26 tools for neural tree organization:
   Filesystem: scan, trace, backup, restore
   Intelligence: wire, generate_queries
   Reorganize: plan_move, plan_split, find_dead, generate_index, shrink_and_wire, split_and_wire
@@ -30,6 +30,7 @@ from neuraltree_mcp.sandbox.sandbox import register as register_sandbox
 from neuraltree_mcp.tools.precision import register as register_precision
 from neuraltree_mcp.tools.viking_index import register as register_viking_index
 from neuraltree_mcp.tools.knowledge_map import register as register_knowledge_map
+from neuraltree_mcp.tools.wiki_lint import register as register_wiki_lint
 
 register_scan(mcp)
 register_trace(mcp)
@@ -45,6 +46,7 @@ register_sandbox(mcp)
 register_precision(mcp)
 register_viking_index(mcp)
 register_knowledge_map(mcp)
+register_wiki_lint(mcp)
 
 
 if __name__ == "__main__":

@@ -8,13 +8,13 @@
 
 ## Current Status
 
-**COMPLETE.** 25 MCP tools (399 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 26 MCP tools (426 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
 Skill (SKILL.md) = THE BRAIN — explore-first orchestration
-MCP Server (neuraltree-mcp) = THE MUSCLE — 25 tools, 399 tests
+MCP Server (neuraltree-mcp) = THE MUSCLE — 26 tools, 426 tests
 Viking MCP = THE MEMORY — semantic search
 Agent Swarm = THE EYES — 2-10 parallel explorers
 Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
@@ -31,7 +31,7 @@ Phase 5: EXECUTE  — apply in sandbox
 Phase 6: VERIFY   — universal organization scoring confirms improvement
 ```
 
-## MCP Server — 25 Tools
+## MCP Server — 26 Tools
 
 | Category | Tools |
 |----------|-------|
@@ -42,6 +42,7 @@ Phase 6: VERIFY   — universal organization scoring confirms improvement
 | Lessons | lesson_match, lesson_add |
 | Scoring | score, diagnose, predict, update_calibration |
 | Semantic | precision (Viking search + content retrieval), viking_index (batch indexing) |
+| Wiki | wiki_lint (broken links, orphans, freshness, cross-ref density) |
 | Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
 
 ## Project Structure
@@ -52,10 +53,10 @@ neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
 │   │   ├── __init__.py          Version 0.1.0
-│   │   ├── server.py            Entry point — registers all 25 tools
+│   │   ├── server.py            Entry point — registers all 26 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
-│   │   ├── tools/               7 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize)
+│   │   ├── tools/               8 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize, wiki_lint)
 │   │   ├── scoring/             3 modules (score, diagnose, predict+update_calibration)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
@@ -68,12 +69,14 @@ neuraltree/
 │           ├── execute.md       Phase 5: sandbox execution
 │           ├── verify.md        Phase 6: adaptive scoring
 │           └── report.md        Output: before/after comparison
-├── tests/                       399 tests passing
+├── tests/                       426 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
-│   ├── unit/                    11 test files
+│   ├── unit/                    12 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
 ├── lessons/                     Design lessons (autoloop, v2 decisions)
-├── docs/                        Session handoff docs (Sessions 5-11)
+├── docs/
+│   ├── concepts/                11 concept pages (Karpathy LLM-Wiki style, one concept = one page)
+│   └── HANDOFF_*.md             Session handoff docs
 ├── requirements.txt             Python dependencies
 └── README.md                    Public docs
 ```
@@ -114,10 +117,10 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (399 passing)
+# Run tests (426 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
-# Verify all 25 tools load
+# Verify all 26 tools load
 PYTHONPATH=src python3.11 -c "
 import asyncio
 from neuraltree_mcp.server import mcp

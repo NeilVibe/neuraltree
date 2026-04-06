@@ -35,15 +35,29 @@ def _check_viking(viking_url: str) -> bool:
         return False
 
 
+def _source_doc(uri: str) -> str:
+    """Extract source document path from a Viking chunk URI.
+
+    viking://resources/neuraltree/CLAUDE.md/CLAUDEmd_NeuralTree/chunk.md
+    → 'CLAUDE.md'
+    """
+    # Strip scheme + project prefix: "neuraltree/CLAUDE.md/chunk..."
+    path = uri.replace("viking://resources/", "")
+    parts = path.split("/")
+    # parts[0] = project, parts[1] = source doc, rest = chunks
+    return parts[1] if len(parts) > 1 else path
+
+
 def _viking_search(
     viking_url: str, query: str, limit: int, project_name: str | None = None
 ) -> list[dict]:
     """Search Viking and return list of {uri, score, abstract}.
 
     If project_name is set, over-fetches and filters to URIs containing
-    the project name to avoid cross-project bleed.
+    the project name to avoid cross-project bleed. Deduplicates by source
+    document — keeps only the highest-scoring chunk per source doc.
     """
-    fetch_limit = limit * 3 if project_name else limit
+    fetch_limit = limit * 10 if project_name else limit * 3
     try:
         r = requests.post(
             f"{viking_url}/api/v1/search/search",
@@ -65,7 +79,16 @@ def _viking_search(
         if project_name:
             prefix = f"viking://resources/{project_name}/"
             results = [r for r in results if r["uri"].startswith(prefix)]
-        return results[:limit]
+
+        # Deduplicate: keep only the best chunk per source document
+        seen_docs: set[str] = set()
+        deduped: list[dict] = []
+        for res in results:
+            doc = _source_doc(res["uri"])
+            if doc not in seen_docs:
+                seen_docs.add(doc)
+                deduped.append(res)
+        return deduped[:limit]
     except (requests.ConnectionError, requests.Timeout, ValueError, OSError):
         return []
 
@@ -73,15 +96,17 @@ def _viking_search(
 def _viking_read(viking_url: str, uri: str) -> str:
     """Read full content from Viking resource. Returns first N chars."""
     try:
-        r = requests.post(
+        r = requests.get(
             f"{viking_url}/api/v1/content/read",
-            json={"uri": uri},
+            params={"uri": uri},
             timeout=_READ_TIMEOUT,
         )
         if r.status_code != 200:
             return ""
         data = r.json()
-        content = data.get("result", {}).get("content", "")
+        # Viking returns result as a string directly, not {"content": "..."}
+        result = data.get("result", "")
+        content = result if isinstance(result, str) else result.get("content", "")
         return content[:_CONTENT_PREVIEW_CHARS]
     except (requests.ConnectionError, requests.Timeout, ValueError, OSError):
         return ""
