@@ -8,13 +8,13 @@
 
 ## Current Status
 
-**COMPLETE.** 25 MCP tools (385 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 25 MCP tools (399 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
 Skill (SKILL.md) = THE BRAIN — explore-first orchestration
-MCP Server (neuraltree-mcp) = THE MUSCLE — 25 tools, 384 tests
+MCP Server (neuraltree-mcp) = THE MUSCLE — 25 tools, 399 tests
 Viking MCP = THE MEMORY — semantic search
 Agent Swarm = THE EYES — 2-10 parallel explorers
 Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
@@ -68,13 +68,12 @@ neuraltree/
 │           ├── execute.md       Phase 5: sandbox execution
 │           ├── verify.md        Phase 6: adaptive scoring
 │           └── report.md        Output: before/after comparison
-├── tests/                       385 tests passing
+├── tests/                       399 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
 ├── lessons/                     Design lessons (autoloop, v2 decisions)
-├── docs/
-│   └── handoffs/                Session handoff docs
+├── docs/                        Session handoff docs (Sessions 5-11)
 ├── requirements.txt             Python dependencies
 └── README.md                    Public docs
 ```
@@ -94,6 +93,7 @@ neuraltree/
 - **Trace Before Prune:** Investigate every connection before recommending deletion.
 - **User Approves Destructive Actions:** Autoloop thinks, user decides on deletes/moves.
 - **Sandbox First:** Autoloop runs in isolated git worktree, never touches real project.
+- **Algorithm → Tool, Judgment → Claude:** Deterministic logic lives in MCP tools. Reasoning lives in the Skill. See `lessons/v2-design-decisions.md`.
 
 ## Integration Points (all wired and verified)
 
@@ -114,7 +114,7 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (385 passing)
+# Run tests (399 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Verify all 25 tools load

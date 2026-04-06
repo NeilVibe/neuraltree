@@ -102,16 +102,15 @@ NeuralTree's MCP server provides 25 tools across 8 categories:
 
 ## Flow Score
 
-The Flow Score is a single number (0.0-1.0) that tells you whether information is flowing or stuck. It's a weighted composite of 6 metrics:
+The Flow Score is a single number (0.0-1.0) that tells you whether information is flowing or stuck. It's a weighted composite of 5 universal metrics derived from the knowledge map:
 
 | Metric | Weight | What It Measures |
 |--------|--------|-----------------|
-| **Hop Efficiency** | 25% | Can any fact be reached in 0-2 hops? The fundamental guarantee. |
-| **Precision@3** | 25% | Do the top 3 Viking search results actually answer the query? |
-| **Synapse Coverage** | 20% | What percentage of knowledge files have `## Related` cross-references? |
-| **Dead Neuron Ratio** | 15% | How many files are orphaned — referenced by nothing, invisible to the network? |
-| **Freshness** | 10% | Are files verified recently, or is the content stale and untrusted? |
-| **Trunk Pressure** | 5% | Are index files lean (<100 lines), or bloated with noise? |
+| **Reachability** | 30% | % of files reachable in ≤3 hops from entry points (CLAUDE.md, README.md) via any edge type. |
+| **Connectivity** | 25% | % of files with at least 1 edge — not orphaned from the knowledge graph. |
+| **Cluster Coherence** | 20% | % of related-file pairs that share a parent directory — are related files co-located? |
+| **Size Balance** | 15% | % of files within 3× median size — no mega-files burying information. |
+| **Discoverability** | 10% | Precision@3 from Viking semantic search — can the AI actually find what it needs? |
 
 | Score Range | Status | Meaning |
 |-------------|--------|---------|
@@ -228,7 +227,7 @@ NeuralTree automatically detects the right mode based on your project's state:
 ### Run tests
 
 ```bash
-# Full test suite (384 tests)
+# Full test suite (399 tests)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Quick smoke test
