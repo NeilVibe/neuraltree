@@ -68,12 +68,13 @@ neuraltree/
 │           ├── execute.md       Phase 5: sandbox execution
 │           ├── verify.md        Phase 6: adaptive scoring
 │           └── report.md        Output: before/after comparison
-├── tests/                       384 tests passing
+├── tests/                       385 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
+├── lessons/                     Design lessons (autoloop, v2 decisions)
 ├── docs/
-│   └── specs/                   Design spec v5 (reviewed by 25 agents)
+│   └── handoffs/                Session handoff docs
 ├── requirements.txt             Python dependencies
 └── README.md                    Public docs
 ```

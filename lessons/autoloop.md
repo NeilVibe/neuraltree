@@ -38,4 +38,4 @@ last_verified: 2026-04-05
 
 ## Docs
 - `CLAUDE.md` — implementation target
-- `docs/specs/2026-04-04-neuraltree-skill-design.md` — implementation target
+- `lessons/v2-design-decisions.md` — later design lessons from v2 build

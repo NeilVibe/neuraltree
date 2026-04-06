@@ -97,9 +97,7 @@ result = neuraltree_knowledge_map(action="build", project_root=".", explorer_rep
 ### Priority 2: Execute the pipeline actions from the aborted run
 These were approved but never executed:
 - **AUTO-FIX:** Wire CLAUDE.md, README.md, handoffs, lessons with `## Related` sections
-- **APPROVE:** Delete 17k-line completed plan (dead orphan: `docs/superpowers/plans/2026-04-06-neuraltree-v2-explore-first.md`)
-- **APPROVE:** Archive Session 4 handoff (stale v1 content)
-- **APPROVE:** Create `lessons/v2-design-decisions.md`
+- **DONE (Session 7):** Deleted 17k-line completed plan, archived Session 4 handoff, created `lessons/v2-design-decisions.md`
 
 ### Priority 3: Test on a larger project
 - Run `/neuraltree` on LocaNext or newfin (300+ knowledge files)
@@ -115,8 +113,8 @@ These were approved but never executed:
 1. **MCP server must be restarted** — `build` action is in the code but the running server is stale
 2. **`.neuraltree/` directory exists** from the aborted pipeline run — contains `knowledge_map.json` (manually built, not deterministic) and `.lock` (already removed). The `knowledge_map.json` should be rebuilt by the deterministic tool on next run
 3. **install.sh copies all section files** via `*.md` glob — this already works for v2 sections, no fix needed
-4. **`docs/superpowers/plans/2026-04-06-neuraltree-v2-explore-first.md`** — 17,281 lines, dead orphan, should be deleted
-5. **`docs/HANDOFF_2026-04-06_SESSION4.md`** — describes v1 architecture, superseded by v2, should be archived
+4. ~~`docs/superpowers/plans/...`~~ — deleted in Session 7
+5. ~~`docs/HANDOFF_2026-04-06_SESSION4.md`~~ — deleted in Session 7
 
 ## Key Files Changed This Session
 
