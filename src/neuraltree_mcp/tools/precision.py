@@ -80,21 +80,39 @@ def _viking_search(
             prefix = f"viking://resources/{project_name}/"
             results = [r for r in results if r["uri"].startswith(prefix)]
 
-        # Deduplicate: keep only the best chunk per source document
+        # Deduplicate: keep only the best *content* chunk per source document.
+        # Skip .overview.md stubs — they have titles but no real content.
         seen_docs: set[str] = set()
         deduped: list[dict] = []
         for res in results:
             doc = _source_doc(res["uri"])
-            if doc not in seen_docs:
-                seen_docs.add(doc)
-                deduped.append(res)
+            if doc in seen_docs:
+                continue
+            # Prefer content chunks over overview stubs
+            if res["uri"].endswith("/.overview.md"):
+                # Look ahead for a content chunk from the same doc
+                content_chunk = next(
+                    (r for r in results if _source_doc(r["uri"]) == doc
+                     and not r["uri"].endswith("/.overview.md")),
+                    None,
+                )
+                if content_chunk is not None:
+                    seen_docs.add(doc)
+                    deduped.append(content_chunk)
+                    continue
+            seen_docs.add(doc)
+            deduped.append(res)
         return deduped[:limit]
     except (requests.ConnectionError, requests.Timeout, ValueError, OSError):
         return []
 
 
 def _viking_read(viking_url: str, uri: str) -> str:
-    """Read full content from Viking resource. Returns first N chars."""
+    """Read full content from Viking resource. Returns first N chars.
+
+    If the content is too short (likely an overview stub), returns it anyway —
+    the dedup logic should have already routed us to a content chunk.
+    """
     try:
         r = requests.get(
             f"{viking_url}/api/v1/content/read",

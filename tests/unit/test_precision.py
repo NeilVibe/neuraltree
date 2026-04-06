@@ -172,6 +172,70 @@ class TestVikingSearch:
             assert len(results) == 1
             assert results[0]["score"] == 0.95
 
+    def test_skips_overview_stubs_for_content_chunks(self):
+        """Overview stubs (.overview.md) should be skipped in favor of content chunks."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    # Overview stub scores highest but has no real content
+                    {"uri": "viking://resources/proj/concept.md/.overview.md", "score": 0.9, "abstract": ""},
+                    # Content chunk from same doc, lower score
+                    {"uri": "viking://resources/proj/concept.md/upload_abc123.md", "score": 0.7, "abstract": ""},
+                    {"uri": "viking://resources/proj/other.md/chunk1.md", "score": 0.6, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name="proj")
+            assert len(results) == 2
+            # Should pick the content chunk, not the overview stub
+            assert results[0]["uri"] == "viking://resources/proj/concept.md/upload_abc123.md"
+            assert results[1]["uri"] == "viking://resources/proj/other.md/chunk1.md"
+
+    def test_keeps_overview_when_no_content_chunk_exists(self):
+        """If a doc only has an overview stub, keep it (better than nothing)."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    {"uri": "viking://resources/proj/tiny.md/.overview.md", "score": 0.8, "abstract": ""},
+                    {"uri": "viking://resources/proj/other.md/chunk1.md", "score": 0.6, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name="proj")
+            assert len(results) == 2
+            # No content chunk for tiny.md, so overview is kept
+            assert results[0]["uri"] == "viking://resources/proj/tiny.md/.overview.md"
+
+    def test_overview_skip_with_multiple_docs(self):
+        """Overview skip works across multiple source docs."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    {"uri": "viking://resources/proj/A.md/.overview.md", "score": 0.95, "abstract": ""},
+                    {"uri": "viking://resources/proj/B.md/.overview.md", "score": 0.90, "abstract": ""},
+                    {"uri": "viking://resources/proj/A.md/upload_001.md", "score": 0.85, "abstract": ""},
+                    {"uri": "viking://resources/proj/B.md/upload_002.md", "score": 0.80, "abstract": ""},
+                    {"uri": "viking://resources/proj/C.md/chunk.md", "score": 0.70, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name="proj")
+            assert len(results) == 3
+            uris = [r["uri"] for r in results]
+            # Content chunks preferred over overviews
+            assert "viking://resources/proj/A.md/upload_001.md" in uris
+            assert "viking://resources/proj/B.md/upload_002.md" in uris
+            assert "viking://resources/proj/C.md/chunk.md" in uris
+
 
 class TestSourceDoc:
     def test_extracts_source_doc(self):
