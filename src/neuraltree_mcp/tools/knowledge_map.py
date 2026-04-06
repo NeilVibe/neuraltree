@@ -13,6 +13,28 @@ from neuraltree_mcp.validation import validate_project_root
 KNOWLEDGE_MAP_FILE = ".neuraltree/knowledge_map.json"
 
 
+def _has_path_traversal(path: str) -> bool:
+    """Return True if a path contains traversal sequences or is absolute."""
+    return path.startswith("/") or ".." in path.split("/")
+
+
+def _validate_map_paths(knowledge_map: dict) -> str | None:
+    """Validate that file paths in the knowledge map don't contain traversal.
+
+    Returns:
+        An error message string if invalid, or None if all paths are safe.
+    """
+    for fp in knowledge_map.get("files", {}):
+        if _has_path_traversal(fp):
+            return f"Invalid file path in knowledge map: {fp}"
+    for edge in knowledge_map.get("edges", []):
+        for key in ("source", "target"):
+            val = edge.get(key, "")
+            if _has_path_traversal(val):
+                return f"Invalid edge {key} path in knowledge map: {val}"
+    return None
+
+
 def _save_map(knowledge_map: dict, project_root: str) -> Path:
     """Save a knowledge map to .neuraltree/knowledge_map.json.
 
@@ -22,7 +44,14 @@ def _save_map(knowledge_map: dict, project_root: str) -> Path:
 
     Returns:
         Path to the saved file.
+
+    Raises:
+        ValueError: If any file path in the map contains path traversal.
+        OSError: If directory creation or file write fails.
     """
+    err = _validate_map_paths(knowledge_map)
+    if err:
+        raise ValueError(err)
     root = validate_project_root(project_root)
     nt_dir = root / ".neuraltree"
     nt_dir.mkdir(parents=True, exist_ok=True)
@@ -39,6 +68,7 @@ def _load_map(project_root: str) -> dict | None:
 
     Returns:
         The knowledge map dict, or None if the file does not exist.
+        If the file exists but is corrupt, returns ``{"error": "..."}``.
     """
     root = validate_project_root(project_root)
     target = root / ".neuraltree" / "knowledge_map.json"
@@ -46,8 +76,10 @@ def _load_map(project_root: str) -> dict | None:
         return None
     try:
         return json.loads(target.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    except json.JSONDecodeError as exc:
+        return {"error": f"knowledge_map.json exists but is corrupt: {exc}"}
+    except OSError as exc:
+        return {"error": f"knowledge_map.json exists but cannot be read: {exc}"}
 
 
 def _query_map(
@@ -72,6 +104,8 @@ def _query_map(
     km = _load_map(project_root)
     if km is None:
         return {"error": "No knowledge map found. Run save first."}
+    if "error" in km:
+        return km
 
     # Query by file
     if file_path is not None:
@@ -134,6 +168,9 @@ def register(mcp: FastMCP) -> None:
           - load: Load the knowledge map from disk
           - query: Query by file_path, cluster, neighbors_of, or issues_only
 
+        Query filters are mutually exclusive. If multiple are supplied,
+        priority: file_path > cluster > neighbors_of > issues_only.
+
         Args:
             action: One of 'save', 'load', 'query'.
             project_root: Project root directory.
@@ -157,13 +194,15 @@ def register(mcp: FastMCP) -> None:
             try:
                 path = _save_map(knowledge_map, project_root)
                 return {"saved": str(path), "files": len(knowledge_map.get("files", {}))}
-            except OSError as e:
+            except (OSError, ValueError) as e:
                 return {"error": f"Failed to save: {e}"}
 
         elif action == "load":
             km = _load_map(project_root)
             if km is None:
                 return {"error": "No knowledge map found"}
+            if "error" in km:
+                return km
             return {"knowledge_map": km}
 
         elif action == "query":
