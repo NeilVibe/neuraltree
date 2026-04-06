@@ -57,14 +57,18 @@ def _parse_last_verified(content: str) -> str | None:
 
 
 def _load_knowledge_map(root: Path) -> dict | None:
-    """Load .neuraltree/knowledge_map.json if it exists."""
+    """Load .neuraltree/knowledge_map.json if it exists.
+
+    Returns None if the file doesn't exist, or {"error": "corrupt"} if it
+    exists but cannot be parsed.
+    """
     km_path = root / ".neuraltree" / "knowledge_map.json"
     if not km_path.exists():
         return None
     try:
         return json.loads(km_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return None
+        return {"error": "corrupt"}
 
 
 def _derive_adaptive_thresholds(knowledge_map: dict) -> dict:
@@ -285,9 +289,10 @@ def register(mcp: FastMCP) -> None:
 
         # --- Adaptive mode: derive thresholds from knowledge map ---
         adaptive_context: dict | None = None
+        trunk_pressure: float = 0.3  # safe default before branching logic
         if adaptive:
             knowledge_map = _load_knowledge_map(root)
-            if knowledge_map is not None:
+            if knowledge_map is not None and "error" not in knowledge_map:
                 thresholds = _derive_adaptive_thresholds(knowledge_map)
                 trunk_pressure = _compute_adaptive_trunk_pressure(trunk_lines, thresholds["trunk_cap"])
                 # Override freshness window for adaptive freshness recomputation
@@ -324,8 +329,9 @@ def register(mcp: FastMCP) -> None:
                     },
                 }
             else:
-                # No knowledge map — fall back to static thresholds
-                adaptive_context = {"source": "static", "reason": "no knowledge_map"}
+                # No knowledge map or corrupt — fall back to static thresholds
+                reason = "corrupt knowledge_map" if knowledge_map is not None else "no knowledge_map"
+                adaptive_context = {"source": "static", "reason": reason}
                 # Use standard static trunk pressure
                 if trunk_lines < 80:
                     trunk_pressure = 1.0
