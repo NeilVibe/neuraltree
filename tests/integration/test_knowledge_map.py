@@ -440,35 +440,36 @@ class TestKnowledgeMapBuild:
         assert result["knowledge_map"]["stats"]["total_files"] == 4
 
 
-class TestAdaptiveScoreWithKnowledgeMap:
-    """Score with adaptive=True should read the knowledge map."""
+class TestScoreWithKnowledgeMap:
+    """Score reads the knowledge map for universal organization metrics."""
 
-    def test_adaptive_score_uses_knowledge_map(self, tmp_project):
+    def test_score_uses_knowledge_map(self, tmp_project):
         from neuraltree_mcp.tools.knowledge_map import _save_map
 
         km = {
             "version": 2,
             "files": {f"file_{i}.md": {"size_lines": 50} for i in range(50)},
-            "edges": [],
-            "clusters": [],
-            "stats": {"total_files": 50, "total_edges": 0, "avg_file_size": 50, "max_depth": 1},
+            "edges": [{"source": "file_0.md", "target": "file_1.md", "type": "reference"}],
+            "clusters": [{"files": ["file_0.md", "file_1.md"]}],
+            "stats": {"total_files": 50, "total_edges": 1, "avg_file_size": 50, "max_depth": 1},
         }
         _save_map(km, str(tmp_project))
 
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
-            "adaptive": True,
         })
-        assert "adaptive_context" in result
-        assert result["adaptive_context"]["source"] == "knowledge_map"
+        assert "error" not in result
+        assert "metrics" in result
+        assert "reachability" in result["metrics"]
+        assert "connectivity" in result["metrics"]
+        assert result["details"]["total_files"] == 50
 
-    def test_adaptive_score_without_map_falls_back(self, tmp_project):
+    def test_score_without_map_returns_error(self, tmp_project):
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
-            "adaptive": True,
         })
-        assert "adaptive_context" in result
-        assert result["adaptive_context"]["source"] == "static"
+        assert "error" in result
+        assert "knowledge map" in result["error"].lower()
 
 
 class TestKnowledgeMapRoundTrip:

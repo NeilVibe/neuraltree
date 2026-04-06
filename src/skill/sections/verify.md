@@ -1,25 +1,26 @@
-# Verify Phase — Adaptive Scoring
+# Verify Phase — Organization Scoring
 
 > Score AFTER understanding. The score validates your work, it doesn't drive it.
 
 **Input:** Sandbox with applied changes.
 **Output:** Before/after score comparison. Sandbox approval prompt.
 
-## Step 1: Score with Adaptive Mode
+## Step 1: Score from Knowledge Map
 
 ```
 score_result = neuraltree_score(
     project_root=sandbox_root,
-    adaptive=True,
 )
 ```
 
-The adaptive mode reads the knowledge map and adjusts:
-- Trunk pressure cap (scales with project size)
-- Freshness window (scales with project depth)
-- File size thresholds (relative to project average)
+The score reads the knowledge map and computes:
+- **reachability** — % of files reachable in ≤3 hops from entry points
+- **connectivity** — % of files with at least 1 edge (not orphaned)
+- **cluster_coherence** — % of related file pairs in same directory
+- **size_balance** — % of files within 3× median size
+- **discoverability** — precision@3 from Viking (computed below)
 
-## Step 2: Compute Precision@3 (if Viking available)
+## Step 2: Compute Discoverability (if Viking available)
 
 ```
 if not DEGRADED_MODE:
@@ -28,9 +29,9 @@ if not DEGRADED_MODE:
         queries=queries["queries"],
         project_root=sandbox_root,
     )
-    # Claude judges relevance (same as v1)
-    precision_at_3 = judge_precision(precision_result)
-    final_score = score_result["flow_score_partial"] + (precision_at_3 * 0.25)
+    # Claude judges relevance
+    discoverability = judge_precision(precision_result)
+    final_score = score_result["flow_score_partial"] + (discoverability * 0.10)
 else:
     final_score = score_result["flow_score_partial"]
 ```
@@ -60,10 +61,9 @@ else:
 
 response = wait_for_user_input()
 if "approve" in response.lower():
-    neuraltree_sandbox_apply(project_root=".")  # files=None means apply ALL sandbox changes
+    neuraltree_sandbox_apply(project_root=".")
     emit("Changes applied.")
 
-    # Update state
     state = {
         "timestamp": now_iso8601(),
         "flow_score": final_score,

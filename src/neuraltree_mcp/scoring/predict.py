@@ -11,26 +11,22 @@ from neuraltree_mcp.scoring.score import WEIGHTS
 
 # Which metrics can be simulated without Viking
 SIMULATABLE = {
-    "synapse_coverage": True,
-    "dead_neuron_ratio": True,
-    "trunk_pressure": True,
-    "hop_efficiency": True,  # estimate only
-    "freshness": True,
-    "precision_at_3": False,  # needs actual Viking re-index
+    "reachability": True,
+    "connectivity": True,
+    "cluster_coherence": True,
+    "size_balance": True,
+    "discoverability": False,  # needs actual Viking re-index
 }
 
 DEFAULT_CALIBRATION = {
-    "accuracy": 0.5,  # starts at 0.5 (no data), converges toward actual
+    "accuracy": 0.5,
     "runs": 0,
     "predictions": [],
 }
 
 
 def _load_calibration(project_root: str) -> tuple[dict, list[str]]:
-    """Load calibration data from .neuraltree/calibration.json.
-
-    Returns (data, warnings). Falls back to defaults on missing/corrupt file.
-    """
+    """Load calibration data from .neuraltree/calibration.json."""
     cal_path = Path(project_root).resolve() / ".neuraltree" / "calibration.json"
     warnings: list[str] = []
     if cal_path.exists():
@@ -60,18 +56,20 @@ def register(mcp: FastMCP) -> None:
         """Virtual backtest — predict score improvement for proposed changes.
 
         Simulates the effect of changes WITHOUT executing them.
-        Uses calibration weights from past runs for confidence scoring.
 
         Each proposed change should be:
         {
-            "action": "wire" | "index" | "split" | "update_freshness" | "archive" | "delete",
+            "action": "connect" | "split" | "relocate" | "delete" | "archive" | "viking_index",
             "target": "path/to/file",
             "details": "description of change"
         }
 
-        Simulatable metrics: synapse_coverage, dead_neuron_ratio, trunk_pressure,
-        hop_efficiency (estimate), freshness.
-        NOT simulatable: precision_at_3 (needs actual Viking re-index).
+        Actions:
+        - connect: Add references between files (improves connectivity + reachability)
+        - split: Split a large file into focused pieces (improves size_balance)
+        - relocate: Move file to better directory (improves cluster_coherence)
+        - delete/archive: Remove dead file (improves connectivity)
+        - viking_index: Re-index in Viking (improves discoverability)
 
         Args:
             current_metrics: Current metric values from neuraltree_score().
@@ -88,7 +86,6 @@ def register(mcp: FastMCP) -> None:
             return {"error": str(e), "predicted_flow_score": 0.0, "confidence": 0.0}
         calibration, cal_warnings = _load_calibration(project_root)
 
-        # Start with current metrics
         predicted = dict(current_metrics)
         change_impacts: list[dict] = []
 
@@ -97,123 +94,60 @@ def register(mcp: FastMCP) -> None:
             target = change.get("target", "")
             impact: dict = {"action": action, "target": target, "metric_deltas": {}}
 
-            if action == "wire":
-                # Adding ## Related/## Docs increases synapse coverage.
-                # Delta is proportional to remaining headroom — wiring the last
-                # unwired file gives a smaller delta than wiring the first.
-                current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
-                headroom = 1.0 - current_syn
-                delta = headroom * 0.05  # ~5% of remaining gap per wire
-                predicted["synapse_coverage"] = min(1.0, current_syn + delta)
-                impact["metric_deltas"]["synapse_coverage"] = delta
-                # Note: wire adds outbound links FROM target, not inbound links TO target.
-                # Dead neuron ratio measures inbound references, so wiring alone
-                # does NOT reduce dead neurons. Only archive/delete does.
+            if action == "connect":
+                # Adding references improves connectivity and reachability
+                current_conn = predicted.get("connectivity", 0.0) or 0.0
+                conn_delta = (1.0 - current_conn) * 0.08
+                predicted["connectivity"] = min(1.0, current_conn + conn_delta)
+                impact["metric_deltas"]["connectivity"] = conn_delta
 
-            elif action == "index":
-                # Re-indexing in Viking improves precision_at_3 (not simulatable,
-                # but we estimate a small delta for prediction purposes).
-                current_p3 = predicted.get("precision_at_3") or 0.0
-                headroom = 1.0 - current_p3
-                delta = headroom * 0.06  # ~6% of remaining gap
-                impact["metric_deltas"]["precision_at_3"] = delta
-                # Don't update predicted["precision_at_3"] — it's non-simulatable.
-                # The delta is tracked for calibration comparison only.
-
-            elif action == "generate_index":
-                # Creating _INDEX.md files improves hop efficiency (navigation)
-                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                headroom = 1.0 - current_hop
-                delta = headroom * 0.08  # ~8% of remaining gap
-                predicted["hop_efficiency"] = min(1.0, current_hop + delta)
-                impact["metric_deltas"]["hop_efficiency"] = delta
+                current_reach = predicted.get("reachability", 0.0) or 0.0
+                reach_delta = (1.0 - current_reach) * 0.05
+                predicted["reachability"] = min(1.0, current_reach + reach_delta)
+                impact["metric_deltas"]["reachability"] = reach_delta
 
             elif action == "split":
-                # Splitting a large file improves hop efficiency and synapse coverage
-                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                hop_headroom = 1.0 - current_hop
-                delta = hop_headroom * 0.03
-                predicted["hop_efficiency"] = min(1.0, current_hop + delta)
-                impact["metric_deltas"]["hop_efficiency"] = delta
-
-            # --- Strategy-level actions (batch operations) ---
+                # Splitting large files improves size_balance
+                current_sb = predicted.get("size_balance", 0.0) or 0.0
+                sb_delta = (1.0 - current_sb) * 0.10
+                predicted["size_balance"] = min(1.0, current_sb + sb_delta)
+                impact["metric_deltas"]["size_balance"] = sb_delta
 
             elif action == "split_large":
-                # Batch split all >500-line files. Big impact on trunk_pressure + hop.
-                current_trunk = predicted.get("trunk_pressure", 0.0) or 0.0
-                trunk_delta = (1.0 - current_trunk) * 0.70  # splits usually fix trunk
-                predicted["trunk_pressure"] = min(1.0, current_trunk + trunk_delta)
-                impact["metric_deltas"]["trunk_pressure"] = trunk_delta
+                # Batch split all oversized files
+                current_sb = predicted.get("size_balance", 0.0) or 0.0
+                sb_delta = (1.0 - current_sb) * 0.50
+                predicted["size_balance"] = min(1.0, current_sb + sb_delta)
+                impact["metric_deltas"]["size_balance"] = sb_delta
 
-                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                hop_delta = (1.0 - current_hop) * 0.10
-                predicted["hop_efficiency"] = min(1.0, current_hop + hop_delta)
-                impact["metric_deltas"]["hop_efficiency"] = hop_delta
+            elif action == "relocate":
+                # Moving files to better directories improves cluster coherence
+                current_cc = predicted.get("cluster_coherence", 0.0) or 0.0
+                cc_delta = (1.0 - current_cc) * 0.10
+                predicted["cluster_coherence"] = min(1.0, current_cc + cc_delta)
+                impact["metric_deltas"]["cluster_coherence"] = cc_delta
 
-                current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
-                dead_delta = (1.0 - current_dead) * 0.08
-                predicted["dead_neuron_ratio"] = min(1.0, current_dead + dead_delta)
-                impact["metric_deltas"]["dead_neuron_ratio"] = dead_delta
-
-            elif action == "wire_orphans":
-                # Batch wire all orphan files. Improves synapse coverage.
-                # Note: wiring adds outbound links FROM target, NOT inbound TO target.
-                # Dead neuron ratio measures inbound refs, so wiring does NOT improve it.
-                current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
-                syn_delta = (1.0 - current_syn) * 0.30
-                predicted["synapse_coverage"] = min(1.0, current_syn + syn_delta)
-                impact["metric_deltas"]["synapse_coverage"] = syn_delta
-
-            elif action == "index_dirs":
-                # Generate indexes for all directories.
-                # WARNING: New indexes increase total_md (denominator) without adding
-                # reachability unless trunk links to them. Can DECREASE hop_efficiency.
-                # Predict 0 delta — let the measure step decide if it actually helped.
-                impact["metric_deltas"]["hop_efficiency"] = 0.0
-                impact["warnings"] = ["index_dirs may decrease hop_efficiency if trunk doesn't link to new indexes"]
-
-            elif action == "re_wire":
-                # Re-wire after splits. Moderate impact on synapse.
-                current_syn = predicted.get("synapse_coverage", 0.0) or 0.0
-                syn_delta = (1.0 - current_syn) * 0.15
-                predicted["synapse_coverage"] = min(1.0, current_syn + syn_delta)
-                impact["metric_deltas"]["synapse_coverage"] = syn_delta
+            elif action in ("delete", "archive"):
+                # Removing dead files improves connectivity
+                current_conn = predicted.get("connectivity", 0.0) or 0.0
+                conn_delta = (1.0 - current_conn) * 0.05
+                predicted["connectivity"] = min(1.0, current_conn + conn_delta)
+                impact["metric_deltas"]["connectivity"] = conn_delta
 
             elif action == "viking_index":
-                # Index all .md files in Viking. Big impact on precision_at_3.
-                current_p3 = predicted.get("precision_at_3") or 0.0
-                p3_delta = (1.0 - current_p3) * 0.40  # Viking indexing is the #1 precision driver
-                impact["metric_deltas"]["precision_at_3"] = p3_delta
-                # Also improves hop_efficiency (Viking search = semantic hop)
-                current_hop = predicted.get("hop_efficiency", 0.0) or 0.0
-                hop_delta = (1.0 - current_hop) * 0.05
-                predicted["hop_efficiency"] = min(1.0, current_hop + hop_delta)
-                impact["metric_deltas"]["hop_efficiency"] = hop_delta
+                # Re-indexing improves discoverability (not simulatable, tracked only)
+                current_disc = predicted.get("discoverability") or 0.0
+                disc_delta = (1.0 - current_disc) * 0.40
+                impact["metric_deltas"]["discoverability"] = disc_delta
 
-            elif action == "update_freshness" or action == "freshness":
-                current_fresh = predicted.get("freshness", 0.0) or 0.0
-                headroom = 1.0 - current_fresh
-                delta = headroom * 0.04  # ~4% of remaining gap
-                predicted["freshness"] = min(1.0, current_fresh + delta)
-                impact["metric_deltas"]["freshness"] = delta
-
-            elif action == "archive" or action == "delete":
-                # Removing dead files improves dead_neuron_ratio
-                current_dead = predicted.get("dead_neuron_ratio", 0.0) or 0.0
-                headroom = 1.0 - current_dead
-                delta = headroom * 0.05  # ~5% of remaining gap
-                predicted["dead_neuron_ratio"] = min(1.0, current_dead + delta)
-                impact["metric_deltas"]["dead_neuron_ratio"] = delta
-
-            elif action == "lesson_add":
-                # Institutional memory — informational metric only (not in Flow Score weights)
-                current_lc = predicted.get("lesson_coverage", 0.0) or 0.0
-                predicted["lesson_coverage"] = current_lc + 0.02
-                impact["metric_deltas"]["lesson_coverage"] = 0.02
+            elif action == "index":
+                # Re-index single file in Viking
+                current_disc = predicted.get("discoverability") or 0.0
+                disc_delta = (1.0 - current_disc) * 0.06
+                impact["metric_deltas"]["discoverability"] = disc_delta
 
             change_impacts.append(impact)
 
-        # Compute predicted flow score (using shared WEIGHTS from score.py)
         predicted_flow = sum(
             (predicted.get(k) or 0.0) * w
             for k, w in WEIGHTS.items()
@@ -224,15 +158,14 @@ def register(mcp: FastMCP) -> None:
             for k, w in WEIGHTS.items()
         )
 
-        # Sum non-simulatable deltas (tracked but not applied to predicted metrics)
+        # Non-simulatable deltas (tracked but not applied)
         non_sim_delta = sum(
-            impact["metric_deltas"].get("precision_at_3", 0.0) * WEIGHTS.get("precision_at_3", 0.0)
+            impact["metric_deltas"].get("discoverability", 0.0) * WEIGHTS.get("discoverability", 0.0)
             for impact in change_impacts
         )
 
-        # Confidence = (simulatable metrics / 6) * calibration accuracy
         simulatable_count = sum(1 for v in SIMULATABLE.values() if v)
-        confidence = (simulatable_count / 6) * calibration["accuracy"]
+        confidence = (simulatable_count / len(SIMULATABLE)) * calibration["accuracy"]
 
         return {
             "current_flow_score": round(current_flow, 3),
@@ -275,11 +208,9 @@ def register(mcp: FastMCP) -> None:
         calibration, cal_warnings = _load_calibration(project_root)
         old_accuracy = calibration["accuracy"]
 
-        # Prediction accuracy = 1 - |predicted - actual| / max(|predicted|, 0.01)
         error = abs(predicted_delta - actual_delta) / max(abs(predicted_delta), 0.01)
         run_accuracy = max(0.0, 1.0 - error)
 
-        # Exponential moving average (alpha = 0.3 for recent-weighting)
         alpha = 0.3
         new_accuracy = alpha * run_accuracy + (1 - alpha) * old_accuracy
 
@@ -290,7 +221,6 @@ def register(mcp: FastMCP) -> None:
             "actual": actual_delta,
             "accuracy": round(run_accuracy, 3),
         })
-        # Keep last 20 predictions
         calibration["predictions"] = calibration["predictions"][-20:]
 
         try:

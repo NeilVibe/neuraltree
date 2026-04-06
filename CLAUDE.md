@@ -28,7 +28,7 @@ Phase 2: MAP      — synthesize into dual-layer knowledge map
 Phase 3: ANALYZE  — Claude reasons about what's wrong  
 Phase 4: PLAN     — propose reorganization, user approves
 Phase 5: EXECUTE  — apply in sandbox
-Phase 6: VERIFY   — adaptive scoring confirms improvement
+Phase 6: VERIFY   — universal organization scoring confirms improvement
 ```
 
 ## MCP Server — 25 Tools
@@ -97,11 +97,12 @@ neuraltree/
 
 ## Integration Points (all wired and verified)
 
-1. `neuraltree_score()` returns `precision_at_3: null` — Skill fills it via Viking search + Claude judging
-2. `neuraltree_diagnose()` receives `viking_results` param for EMBEDDING_GAP classification
-3. `.neuraltree/state.json` is Skill-owned, not MCP-managed
-4. Lesson recording happens after autoloop KEEP/HOLD/DISCARD decisions
-5. Flow Score assembly: `flow_score_partial + (precision_at_3 * 0.25)`
+1. `neuraltree_score()` returns `discoverability: null` — Skill fills it via Viking search + Claude judging
+2. `neuraltree_score()` requires `.neuraltree/knowledge_map.json` — run explore+map first
+3. `neuraltree_diagnose()` receives `viking_results` param for EMBEDDING_GAP classification
+4. `.neuraltree/state.json` is Skill-owned, not MCP-managed
+5. Lesson recording happens after autoloop KEEP/HOLD/DISCARD decisions
+6. Flow Score assembly: `flow_score_partial + (discoverability * 0.10)`
 
 ## Dependencies
 

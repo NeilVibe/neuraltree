@@ -179,22 +179,42 @@ class TestGenerateQueriesTool:
 
 
 class TestScoreTool:
+    def _create_km(self, tmp_project):
+        """Create a minimal knowledge map for score tests."""
+        import json
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir(exist_ok=True)
+        km = {
+            "files": {
+                "CLAUDE.md": {"size_lines": 50},
+                "memory/MEMORY.md": {"size_lines": 20},
+                "memory/rules/coding.md": {"size_lines": 30},
+            },
+            "edges": [
+                {"source": "CLAUDE.md", "target": "memory/MEMORY.md", "type": "reference"},
+                {"source": "memory/MEMORY.md", "target": "memory/rules/coding.md", "type": "reference"},
+            ],
+            "clusters": [{"files": ["memory/MEMORY.md", "memory/rules/coding.md"]}],
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+
     def test_score_returns_all_metrics(self, tmp_project):
+        self._create_km(tmp_project)
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
         })
         assert "metrics" in result
         metrics = result["metrics"]
-        assert "hop_efficiency" in metrics
-        assert "precision_at_3" in metrics
-        assert "synapse_coverage" in metrics
-        assert "dead_neuron_ratio" in metrics
-        assert "freshness" in metrics
-        assert "trunk_pressure" in metrics
-        assert metrics["precision_at_3"] is None  # needs Viking
+        assert "reachability" in metrics
+        assert "connectivity" in metrics
+        assert "cluster_coherence" in metrics
+        assert "size_balance" in metrics
+        assert "discoverability" in metrics
+        assert metrics["discoverability"] is None  # needs Viking
         assert "warnings" in result
 
     def test_score_has_flow_score(self, tmp_project):
+        self._create_km(tmp_project)
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
         })
@@ -202,13 +222,14 @@ class TestScoreTool:
         assert 0.0 <= result["flow_score_partial"] <= 1.0
 
     def test_score_has_details(self, tmp_project):
+        self._create_km(tmp_project)
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
         })
         details = result["details"]
-        assert "total_md_files" in details
+        assert "total_files" in details
         assert "orphan_files" in details
-        assert "stale_files" in details
+        assert "entry_points" in details
 
 
 class TestDiagnoseTool:
@@ -221,29 +242,27 @@ class TestDiagnoseTool:
         assert result["diagnoses"][0]["gap_type"] == "CONTENT_GAP"
         assert "warnings" in result
 
-    def test_diagnose_synapse_gap(self, tmp_project):
+    def test_diagnose_isolation_or_content_gap(self, tmp_project):
         result = call_tool("neuraltree_diagnose", {
             "failed_queries": [{"text": "What is auth model LAN IP-lock admin?"}],
             "project_root": str(tmp_project),
         })
-        # auth.md exists but has no wiring
         diag = result["diagnoses"][0]
-        assert diag["gap_type"] in ("SYNAPSE_GAP", "CONTENT_GAP")  # depends on keyword matching
+        assert diag["gap_type"] in ("ISOLATION_GAP", "CONTENT_GAP")
 
 
 class TestPredictTool:
     def test_predict_returns_correct_shape(self, tmp_project):
         result = call_tool("neuraltree_predict", {
             "current_metrics": {
-                "synapse_coverage": 0.4,
-                "dead_neuron_ratio": 0.7,
-                "hop_efficiency": 0.3,
-                "freshness": 0.5,
-                "trunk_pressure": 0.8,
-                "precision_at_3": 0.0,
+                "reachability": 0.3,
+                "connectivity": 0.4,
+                "cluster_coherence": 0.5,
+                "size_balance": 0.6,
+                "discoverability": 0.1,
             },
             "proposed_changes": [
-                {"action": "wire", "target": "auth.md", "details": "add wiring"},
+                {"action": "connect", "target": "auth.md", "details": "add references"},
             ],
             "project_root": str(tmp_project),
         })

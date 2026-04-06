@@ -56,23 +56,23 @@ class TestBenchmarkPipeline:
         assert isinstance(result["sources"], dict)
 
     def test_score_newfin(self, newfin_project):
-        """Score should compute all structural metrics on a real project."""
+        """Score requires a knowledge map — without one, returns error."""
         result = call_tool("neuraltree_score", {"project_root": str(newfin_project)})
-        assert "error" not in result
-        metrics = result["metrics"]
-        # All metric keys must be present
-        for key in ["hop_efficiency", "synapse_coverage", "dead_neuron_ratio", "freshness", "trunk_pressure"]:
-            assert key in metrics, f"Missing metric: {key}"
-            assert isinstance(metrics[key], (int, float)), f"{key} should be numeric"
-            assert 0.0 <= metrics[key] <= 1.0, f"{key}={metrics[key]} out of range"
-        # precision_at_3 is always None (needs Viking)
-        assert metrics["precision_at_3"] is None
-        # Partial flow score present and bounded
-        assert "flow_score_partial" in result
-        assert 0.0 <= result["flow_score_partial"] <= 1.0
-        # Details should have orphan/stale info
-        assert "details" in result
-        assert "total_md_files" in result["details"]
+        # Without a knowledge map, score returns an error
+        if "error" in result:
+            assert "knowledge map" in result["error"].lower()
+        else:
+            # If a map exists from a prior run, check universal metrics
+            metrics = result["metrics"]
+            for key in ["reachability", "connectivity", "cluster_coherence", "size_balance"]:
+                assert key in metrics, f"Missing metric: {key}"
+                assert isinstance(metrics[key], (int, float)), f"{key} should be numeric"
+                assert 0.0 <= metrics[key] <= 1.0, f"{key}={metrics[key]} out of range"
+            assert metrics["discoverability"] is None
+            assert "flow_score_partial" in result
+            assert 0.0 <= result["flow_score_partial"] <= 1.0
+            assert "details" in result
+            assert "total_files" in result["details"]
 
     def test_diagnose_with_failures(self, newfin_project):
         """Diagnose should classify each failed query into a gap type."""
@@ -87,7 +87,7 @@ class TestBenchmarkPipeline:
         })
         assert result["total_failures"] == 3
         assert len(result["diagnoses"]) == 3
-        valid_gap_types = {"CONTENT_GAP", "EMBEDDING_GAP", "SYNAPSE_GAP", "FRESHNESS_GAP", "FOCUS_GAP"}
+        valid_gap_types = {"CONTENT_GAP", "EMBEDDING_GAP", "ISOLATION_GAP", "FOCUS_GAP"}
         for d in result["diagnoses"]:
             assert d["gap_type"] in valid_gap_types, f"Unknown gap type: {d['gap_type']}"
             assert "query" in d
@@ -101,22 +101,24 @@ class TestBenchmarkPipeline:
 
     def test_predict_impact(self, newfin_project):
         """Predict should estimate improvement from proposed changes."""
-        # First get the real score
-        score = call_tool("neuraltree_score", {"project_root": str(newfin_project)})
-        assert "error" not in score
+        # Score requires knowledge map — use fallback metrics
+        metrics = {
+            "reachability": 0.5, "connectivity": 0.5,
+            "cluster_coherence": 0.5, "size_balance": 0.5,
+            "discoverability": None,
+        }
 
         result = call_tool("neuraltree_predict", {
-            "current_metrics": score["metrics"],
+            "current_metrics": metrics,
             "proposed_changes": [
-                {"action": "wire", "target": "memory/reference/auth.md", "details": "Add ## Related"},
-                {"action": "update_freshness", "target": "memory/rules/coding.md", "details": "Update date"},
+                {"action": "connect", "target": "memory/reference/auth.md", "details": "Add references"},
+                {"action": "split", "target": "memory/rules/coding.md", "details": "Split large file"},
             ],
             "project_root": str(newfin_project),
         })
         assert "error" not in result
         assert result["predicted_delta"] >= 0
         assert 0.0 <= result["confidence"] <= 1.0
-        # Should have per-change impacts
         assert len(result["change_impacts"]) == 2
         assert "current_flow_score" in result
         assert "predicted_flow_score" in result
@@ -344,18 +346,37 @@ class TestAutoLoopCycle:
     """Simulate one autoloop iteration: predict -> backup -> modify -> score -> restore."""
 
     def test_predict_backup_execute_restore_cycle(self, tmp_project):
-        """Simulate one autoloop iteration: predict -> backup -> modify -> score -> restore."""
+        """Simulate one autoloop iteration: predict -> backup -> modify -> restore."""
+        import json
         target_rel = "memory/rules/coding.md"
         original = (tmp_project / target_rel).read_text()
 
+        # Create knowledge map so score works
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir(exist_ok=True)
+        km = {
+            "files": {
+                "CLAUDE.md": {"size_lines": 50},
+                "memory/MEMORY.md": {"size_lines": 20},
+                "memory/rules/coding.md": {"size_lines": 30},
+            },
+            "edges": [
+                {"source": "CLAUDE.md", "target": "memory/MEMORY.md", "type": "reference"},
+                {"source": "memory/MEMORY.md", "target": "memory/rules/coding.md", "type": "reference"},
+            ],
+            "clusters": [{"files": ["memory/MEMORY.md", "memory/rules/coding.md"]}],
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+
         # 1. Score before
         before = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
+        assert "metrics" in before
 
         # 2. Predict
         prediction = call_tool("neuraltree_predict", {
             "current_metrics": before["metrics"],
             "proposed_changes": [
-                {"action": "wire", "target": target_rel, "details": "test"},
+                {"action": "connect", "target": target_rel, "details": "test"},
             ],
             "project_root": str(tmp_project),
         })
@@ -368,11 +389,8 @@ class TestAutoLoopCycle:
         })
         assert len(backup["backed_up"]) == 1
 
-        # 4. Execute (simulate wire by modifying file)
-        (tmp_project / target_rel).write_text(
-            original + "\n## Related\n- [testing.md](testing.md) — patterns\n"
-            "- [auth.md](../reference/auth.md) — auth rules\n"
-        )
+        # 4. Execute (simulate modification)
+        (tmp_project / target_rel).write_text(original + "\nMore content about coding.\n")
 
         # 5. Score after
         after = call_tool("neuraltree_score", {"project_root": str(tmp_project)})

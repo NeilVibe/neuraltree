@@ -1,71 +1,16 @@
-"""Tests for neuraltree_score tool."""
+"""Tests for neuraltree_score — universal organization metrics."""
 import json
 
 from neuraltree_mcp.scoring.score import (
-    _find_md_files,
-    _has_section,
-    _extract_related_targets,
-    _parse_last_verified,
     WEIGHTS,
+    _detect_entry_points,
+    _bfs_reachable,
+    _compute_connectivity,
+    _compute_cluster_coherence,
+    _compute_size_balance,
 )
 
 from tests.conftest import call_tool
-
-
-class TestHasSection:
-    def test_finds_related(self):
-        content = "## Content\nstuff\n\n## Related\n- link\n"
-        assert _has_section(content, "Related") is True
-
-    def test_no_related(self):
-        content = "## Content\nstuff\n"
-        assert _has_section(content, "Related") is False
-
-    def test_inline_mention_not_counted(self):
-        content = "Stuff about Related topics\n"
-        assert _has_section(content, "Related") is False
-
-
-class TestExtractRelatedTargets:
-    def test_basic_targets(self):
-        content = (
-            "## Related\n"
-            "- [testing.md](testing.md) — test patterns\n"
-            "- [auth.md](../reference/auth.md) — auth model\n"
-        )
-        targets = _extract_related_targets(content)
-        assert "testing.md" in targets
-        assert "../reference/auth.md" in targets
-
-    def test_stops_at_next_section(self):
-        content = (
-            "## Related\n"
-            "- [a.md](a.md)\n"
-            "## Docs\n"
-            "- [b.md](b.md)\n"
-        )
-        targets = _extract_related_targets(content)
-        assert "a.md" in targets
-        assert "b.md" not in targets
-
-    def test_no_related_section(self):
-        content = "## Content\nstuff\n"
-        targets = _extract_related_targets(content)
-        assert targets == []
-
-
-class TestParseLastVerified:
-    def test_basic_date(self):
-        content = "---\nlast_verified: 2026-04-04\n---\n"
-        assert _parse_last_verified(content) == "2026-04-04"
-
-    def test_no_date(self):
-        content = "---\nname: Test\n---\n"
-        assert _parse_last_verified(content) is None
-
-    def test_date_in_body(self):
-        content = "last_verified: 2026-01-01\n"
-        assert _parse_last_verified(content) == "2026-01-01"
 
 
 class TestWeights:
@@ -73,127 +18,257 @@ class TestWeights:
         total = sum(WEIGHTS.values())
         assert abs(total - 1.0) < 0.001
 
+    def test_five_metrics(self):
+        assert len(WEIGHTS) == 5
+        for key in ("reachability", "connectivity", "cluster_coherence", "size_balance", "discoverability"):
+            assert key in WEIGHTS
+
+
+class TestDetectEntryPoints:
+    def test_finds_readme_and_claude(self):
+        files = {"README.md": {}, "CLAUDE.md": {}, "src/main.md": {}}
+        entries = _detect_entry_points(files)
+        assert "README.md" in entries
+        assert "CLAUDE.md" in entries
+        assert "src/main.md" not in entries
+
+    def test_case_insensitive_basename(self):
+        # Entry point detection uses lowercase basename
+        files = {"docs/INDEX.md": {}}
+        entries = _detect_entry_points(files)
+        assert "docs/INDEX.md" in entries
+
+    def test_no_entry_points(self):
+        files = {"src/utils.md": {}, "lib/helpers.md": {}}
+        entries = _detect_entry_points(files)
+        assert entries == []
+
+
+class TestBfsReachable:
+    def test_basic_reachability(self):
+        edges = [
+            {"source": "A.md", "target": "B.md"},
+            {"source": "B.md", "target": "C.md"},
+        ]
+        all_files = {"A.md", "B.md", "C.md", "D.md"}
+        reachable = _bfs_reachable(["A.md"], edges, all_files, max_hops=3)
+        assert reachable == {"A.md", "B.md", "C.md"}
+        assert "D.md" not in reachable
+
+    def test_bidirectional(self):
+        edges = [{"source": "A.md", "target": "B.md"}]
+        all_files = {"A.md", "B.md"}
+        # Starting from B should reach A (edges are bidirectional)
+        reachable = _bfs_reachable(["B.md"], edges, all_files, max_hops=3)
+        assert "A.md" in reachable
+
+    def test_max_hops_limit(self):
+        edges = [
+            {"source": "A.md", "target": "B.md"},
+            {"source": "B.md", "target": "C.md"},
+            {"source": "C.md", "target": "D.md"},
+            {"source": "D.md", "target": "E.md"},
+        ]
+        all_files = {"A.md", "B.md", "C.md", "D.md", "E.md"}
+        reachable = _bfs_reachable(["A.md"], edges, all_files, max_hops=2)
+        assert "A.md" in reachable
+        assert "B.md" in reachable
+        assert "C.md" in reachable
+        assert "D.md" not in reachable
+
+    def test_no_entry_points(self):
+        edges = [{"source": "A.md", "target": "B.md"}]
+        reachable = _bfs_reachable([], edges, {"A.md", "B.md"}, max_hops=3)
+        assert reachable == set()
+
+    def test_ignores_files_not_in_all_files(self):
+        edges = [{"source": "A.md", "target": "external.md"}]
+        all_files = {"A.md"}
+        reachable = _bfs_reachable(["A.md"], edges, all_files, max_hops=3)
+        assert reachable == {"A.md"}
+
+    def test_multiple_entry_points(self):
+        edges = [
+            {"source": "A.md", "target": "B.md"},
+            {"source": "C.md", "target": "D.md"},
+        ]
+        all_files = {"A.md", "B.md", "C.md", "D.md"}
+        reachable = _bfs_reachable(["A.md", "C.md"], edges, all_files, max_hops=3)
+        assert reachable == {"A.md", "B.md", "C.md", "D.md"}
+
+
+class TestConnectivity:
+    def test_all_connected(self):
+        edges = [
+            {"source": "A.md", "target": "B.md"},
+            {"source": "B.md", "target": "C.md"},
+        ]
+        ratio, orphans = _compute_connectivity(edges, {"A.md", "B.md", "C.md"})
+        assert ratio == 1.0
+        assert orphans == []
+
+    def test_one_orphan(self):
+        edges = [{"source": "A.md", "target": "B.md"}]
+        ratio, orphans = _compute_connectivity(edges, {"A.md", "B.md", "C.md"})
+        assert abs(ratio - 2 / 3) < 0.01
+        assert orphans == ["C.md"]
+
+    def test_no_edges(self):
+        ratio, orphans = _compute_connectivity([], {"A.md", "B.md"})
+        assert ratio == 0.0
+        assert len(orphans) == 2
+
+
+class TestClusterCoherence:
+    def test_all_same_directory(self):
+        clusters = [{"files": ["src/a.md", "src/b.md", "src/c.md"]}]
+        assert _compute_cluster_coherence(clusters) == 1.0
+
+    def test_scattered_cluster(self):
+        clusters = [{"files": ["src/a.md", "docs/b.md", "lib/c.md"]}]
+        coherence = _compute_cluster_coherence(clusters)
+        assert coherence == 0.0  # no pairs share a directory
+
+    def test_mixed(self):
+        clusters = [{"files": ["src/a.md", "src/b.md", "docs/c.md"]}]
+        coherence = _compute_cluster_coherence(clusters)
+        # 3 pairs: (a,b)=same, (a,c)=diff, (b,c)=diff → 1/3
+        assert abs(coherence - 1 / 3) < 0.01
+
+    def test_singleton_clusters_trivially_coherent(self):
+        clusters = [{"files": ["a.md"]}, {"files": ["b.md"]}]
+        assert _compute_cluster_coherence(clusters) == 1.0
+
+    def test_empty_clusters(self):
+        assert _compute_cluster_coherence([]) == 1.0
+
+    def test_root_directory_files(self):
+        clusters = [{"files": ["a.md", "b.md"]}]
+        coherence = _compute_cluster_coherence(clusters)
+        assert coherence == 1.0  # both in root (dirname=".")
+
+
+class TestSizeBalance:
+    def test_all_balanced(self):
+        files = {
+            "a.md": {"size_lines": 100},
+            "b.md": {"size_lines": 120},
+            "c.md": {"size_lines": 80},
+        }
+        ratio, oversized = _compute_size_balance(files)
+        assert ratio == 1.0
+        assert oversized == []
+
+    def test_one_mega_file(self):
+        files = {
+            "a.md": {"size_lines": 100},
+            "b.md": {"size_lines": 100},
+            "c.md": {"size_lines": 1000},  # 10x median
+        }
+        ratio, oversized = _compute_size_balance(files)
+        assert ratio < 1.0
+        assert "c.md" in oversized
+
+    def test_empty_files_skipped(self):
+        files = {
+            "a.md": {"size_lines": 100},
+            "b.md": {"size_lines": 0},  # empty
+        }
+        ratio, oversized = _compute_size_balance(files)
+        assert ratio == 1.0
+
+    def test_no_files(self):
+        ratio, oversized = _compute_size_balance({})
+        assert ratio == 1.0
+        assert oversized == []
+
+    def test_min_cap_prevents_tiny_project_penalty(self):
+        # Files of 10 lines — 3x median = 30, but min cap is 50
+        files = {
+            "a.md": {"size_lines": 10},
+            "b.md": {"size_lines": 10},
+            "c.md": {"size_lines": 45},  # > 3x median but < min cap 50
+        }
+        ratio, oversized = _compute_size_balance(files)
+        assert ratio == 1.0  # 45 < 50 (min cap)
+
 
 class TestScoreIntegration:
-    def test_find_md_files(self, tmp_project):
-        files = _find_md_files(tmp_project)
-        names = [f.name for f in files]
-        assert "CLAUDE.md" in names
-        assert "MEMORY.md" in names
-        assert "coding.md" in names
-
-    def test_synapse_coverage_partial(self, tmp_project):
-        """coding.md and testing.md have ## Related, auth.md doesn't."""
-        files = _find_md_files(tmp_project)
-        wired = 0
-        total = 0
-        for f in files:
-            content = f.read_text()
-            if _has_section(content, "Related"):
-                targets = _extract_related_targets(content)
-                # Check if targets are alive
-                alive = [t for t in targets if (f.parent / t).exists()]
-                if alive:
-                    wired += 1
-            total += 1
-
-        # At least coding.md and testing.md should be wired
-        assert wired >= 2
-        # Not all files are wired (auth.md, CLAUDE.md etc. aren't)
-        assert wired < total
-
-    def test_freshness_partial(self, tmp_project):
-        """Some files have recent last_verified, some don't."""
-        files = _find_md_files(tmp_project)
-        fresh = 0
-        for f in files:
-            date = _parse_last_verified(f.read_text())
-            if date and date >= "2026-03-05":  # within ~30 days of fixture
-                fresh += 1
-
-        # coding.md has 2026-04-04 (fresh), testing.md has 2026-03-01 (borderline)
-        assert fresh >= 1
-
-
-class TestAdaptiveScoring:
-    """Tests for adaptive=True scoring mode."""
-
-    def test_adaptive_without_map_falls_back_to_static(self, tmp_project):
-        """When adaptive=True but no knowledge_map.json exists, uses static thresholds."""
+    def test_requires_knowledge_map(self, tmp_project):
+        """Score should error when no knowledge map exists."""
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
-            "adaptive": True,
         })
+        assert "error" in result
+        assert "knowledge map" in result["error"].lower()
 
-        assert "error" not in result
-        assert "adaptive_context" in result
-        assert result["adaptive_context"]["source"] == "static"
-        assert result["adaptive_context"]["reason"] == "no knowledge_map"
-        # Metrics should still be present and valid
-        for key in ("hop_efficiency", "synapse_coverage", "dead_neuron_ratio", "freshness", "trunk_pressure"):
-            assert isinstance(result["metrics"][key], (int, float))
-
-    def test_adaptive_with_map_uses_project_stats(self, tmp_project):
-        """When knowledge_map.json exists, adaptive_context.source == 'knowledge_map'."""
+    def test_with_knowledge_map(self, tmp_project):
+        """Score should return all 5 metrics when knowledge map exists."""
         nt_dir = tmp_project / ".neuraltree"
         nt_dir.mkdir()
         km = {
-            "stats": {
-                "total_files": 50,
-                "avg_file_size": 150,
-                "max_depth": 3,
-            }
+            "files": {
+                "README.md": {"size_lines": 100},
+                "CLAUDE.md": {"size_lines": 80},
+                "docs/guide.md": {"size_lines": 50},
+            },
+            "edges": [
+                {"source": "README.md", "target": "CLAUDE.md", "type": "reference"},
+                {"source": "CLAUDE.md", "target": "docs/guide.md", "type": "reference"},
+            ],
+            "clusters": [
+                {"files": ["README.md", "CLAUDE.md"]},
+            ],
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+
+        result = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
+
+        assert "error" not in result
+        metrics = result["metrics"]
+        assert "reachability" in metrics
+        assert "connectivity" in metrics
+        assert "cluster_coherence" in metrics
+        assert "size_balance" in metrics
+        assert "discoverability" in metrics
+        assert metrics["discoverability"] is None  # filled by skill
+        assert result["flow_score_partial"] > 0
+
+    def test_entry_points_auto_detected(self, tmp_project):
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir()
+        km = {
+            "files": {"README.md": {"size_lines": 10}, "other.md": {"size_lines": 10}},
+            "edges": [{"source": "README.md", "target": "other.md"}],
+            "clusters": [],
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+
+        result = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
+        assert "README.md" in result["details"]["entry_points"]
+
+    def test_trunk_paths_override(self, tmp_project):
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir()
+        km = {
+            "files": {"custom.md": {"size_lines": 10}, "other.md": {"size_lines": 10}},
+            "edges": [{"source": "custom.md", "target": "other.md"}],
+            "clusters": [],
         }
         (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
 
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
-            "adaptive": True,
+            "trunk_paths": ["custom.md"],
         })
+        assert result["details"]["entry_points"] == ["custom.md"]
+        assert result["metrics"]["reachability"] == 1.0
 
-        assert "error" not in result
-        assert "adaptive_context" in result
-        ctx = result["adaptive_context"]
-        assert ctx["source"] == "knowledge_map"
-        assert "thresholds" in ctx
-        assert ctx["thresholds"]["trunk_cap"] == 100  # 50 files < 100 threshold
-        assert ctx["thresholds"]["file_size_cap"] == 300  # 2 * 150
-        assert ctx["thresholds"]["freshness_days"] == 40  # base 30 + 10*(3-2)
-
-    def test_adaptive_trunk_pressure_scales_with_project_size(self, tmp_project):
-        """A 500-file project should have trunk_cap > 100."""
+    def test_corrupt_knowledge_map(self, tmp_project):
         nt_dir = tmp_project / ".neuraltree"
         nt_dir.mkdir()
-        km = {
-            "stats": {
-                "total_files": 500,
-                "avg_file_size": 200,
-                "max_depth": 4,
-            }
-        }
-        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+        (nt_dir / "knowledge_map.json").write_text("NOT JSON")
 
-        result = call_tool("neuraltree_score", {
-            "project_root": str(tmp_project),
-            "adaptive": True,
-        })
-
-        ctx = result["adaptive_context"]
-        assert ctx["source"] == "knowledge_map"
-        # 500 files: 100 + 25 * (500 // 100) = 100 + 125 = 225
-        assert ctx["thresholds"]["trunk_cap"] == 225
-        assert ctx["thresholds"]["trunk_cap"] > 100
-        # With trunk_cap=225, small trunk lines (~5) should get 1.0 pressure
-        assert result["metrics"]["trunk_pressure"] == 1.0
-
-    def test_default_mode_unchanged(self, tmp_project):
-        """Calling without adaptive=True returns same result as before — no adaptive_context."""
-        result = call_tool("neuraltree_score", {
-            "project_root": str(tmp_project),
-        })
-
-        assert "error" not in result
-        assert "adaptive_context" not in result
-        assert "metrics" in result
-        assert "flow_score_partial" in result
-        assert result["metrics"]["precision_at_3"] is None
+        result = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
+        assert "error" in result
+        assert "corrupt" in result["error"].lower()

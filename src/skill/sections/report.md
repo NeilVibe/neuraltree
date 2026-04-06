@@ -33,19 +33,17 @@ SCORE
   Before:          {before:.2f}
   After:           {after:.2f}
   Delta:           {delta:+.2f} ({pct:+.0f}%)
-  Mode:            {adaptive|static}
 
-METRICS (adaptive thresholds)
-  ┌──────────────────┬────────┬────────┬────────┐
-  │ Metric           │ Before │ After  │ Delta  │
-  ├──────────────────┼────────┼────────┼────────┤
-  │ hop_efficiency   │ {b_he} │ {a_he} │ {d_he} │
-  │ synapse_coverage │ {b_sc} │ {a_sc} │ {d_sc} │
-  │ dead_neuron_ratio│ {b_dn} │ {a_dn} │ {d_dn} │
-  │ freshness        │ {b_fr} │ {a_fr} │ {d_fr} │
-  │ trunk_pressure   │ {b_tp} │ {a_tp} │ {d_tp} │
-  │ precision_at_3   │ {b_p3} │ {a_p3} │ {d_p3} │
-  └──────────────────┴────────┴────────┴────────┘
+METRICS
+  ┌───────────────────┬────────┬────────┬────────┐
+  │ Metric            │ Before │ After  │ Delta  │
+  ├───────────────────┼────────┼────────┼────────┤
+  │ reachability      │ {b_re} │ {a_re} │ {d_re} │
+  │ connectivity      │ {b_co} │ {a_co} │ {d_co} │
+  │ cluster_coherence │ {b_cc} │ {a_cc} │ {d_cc} │
+  │ size_balance      │ {b_sb} │ {a_sb} │ {d_sb} │
+  │ discoverability   │ {b_di} │ {a_di} │ {d_di} │
+  └───────────────────┴────────┴────────┴────────┘
 
 KNOWLEDGE MAP SAVED: .neuraltree/knowledge_map.json
 STATE SAVED: .neuraltree/state.json

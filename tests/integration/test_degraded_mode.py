@@ -1,8 +1,8 @@
 """Integration tests — degraded mode (no Viking available).
 
 Proves that MCP tools work correctly when Viking is not available:
-- Score computes 5 structural metrics, precision_at_3 stays None
-- Flow score formula uses degraded weights (capped at 0.75)
+- Score computes 4 structural metrics from knowledge map, discoverability stays None
+- Flow score formula uses degraded weights (capped at 0.90)
 - Diagnose classifies using keyword matching only (no EMBEDDING_GAP)
 - Lesson matching works purely on Jaccard similarity
 """
@@ -27,37 +27,58 @@ def call_tool(name: str, args: dict) -> dict:
 
 
 class TestScoreWithoutViking:
-    """neuraltree_score returns 5 structural metrics; precision_at_3 is None."""
+    """neuraltree_score returns 4 structural metrics from knowledge map; discoverability is None."""
+
+    def _create_km(self, tmp_project):
+        import json
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir(exist_ok=True)
+        km = {
+            "files": {
+                "CLAUDE.md": {"size_lines": 50},
+                "memory/MEMORY.md": {"size_lines": 20},
+                "memory/rules/coding.md": {"size_lines": 30},
+            },
+            "edges": [
+                {"source": "CLAUDE.md", "target": "memory/MEMORY.md", "type": "reference"},
+                {"source": "memory/MEMORY.md", "target": "memory/rules/coding.md", "type": "reference"},
+            ],
+            "clusters": [{"files": ["memory/MEMORY.md", "memory/rules/coding.md"]}],
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
 
     def test_score_without_viking(self, tmp_project):
+        self._create_km(tmp_project)
         result = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
 
         metrics = result["metrics"]
 
-        # All 5 structural metrics present and numeric
-        for key in ("hop_efficiency", "synapse_coverage", "dead_neuron_ratio", "freshness", "trunk_pressure"):
+        # All 4 structural metrics present and numeric
+        for key in ("reachability", "connectivity", "cluster_coherence", "size_balance"):
             assert key in metrics, f"Missing metric: {key}"
             assert isinstance(metrics[key], (int, float)), f"{key} should be numeric"
             assert 0.0 <= metrics[key] <= 1.0, f"{key} out of range: {metrics[key]}"
 
-        # precision_at_3 is None — Viking computes it, not MCP
-        assert metrics["precision_at_3"] is None
+        # discoverability is None — Viking computes it, not MCP
+        assert metrics["discoverability"] is None
 
-        # Partial flow score is positive (project has wired files, trunks, etc.)
+        # Partial flow score is positive (project has connected files)
         assert result["flow_score_partial"] > 0
 
     def test_degraded_flow_score_formula(self, tmp_project):
-        """Verify the degraded formula: precision_at_3=None means it contributes 0.
+        """Verify the degraded formula: discoverability=None means it contributes 0.
 
-        Weights: hop=0.25, p@3=0.25, synapse=0.20, dead=0.15, fresh=0.10, trunk=0.05
-        Degraded: p@3 is None so skipped. Max possible = 0.75 (sum of other weights).
+        Weights: reachability=0.30, connectivity=0.25, cluster_coherence=0.20,
+                 size_balance=0.15, discoverability=0.10
+        Degraded: discoverability is None so skipped. Max possible = 0.90.
         """
+        self._create_km(tmp_project)
         result = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
 
         metrics = result["metrics"]
         weights = result["flow_score_weights"]
 
-        # Manually compute expected partial score (skip precision_at_3)
+        # Manually compute expected partial score (skip discoverability)
         expected = 0.0
         for key, weight in weights.items():
             if metrics[key] is not None:
@@ -66,12 +87,11 @@ class TestScoreWithoutViking:
 
         assert result["flow_score_partial"] == expected
 
-        # Degraded cap: max possible is sum of non-None weights = 0.75
+        # Degraded cap: max possible is sum of non-None weights = 0.90
         non_none_weight = sum(w for k, w in weights.items() if metrics[k] is not None)
-        assert abs(non_none_weight - 0.75) < 0.001, f"Non-None weight sum should be 0.75, got {non_none_weight}"
+        assert abs(non_none_weight - 0.90) < 0.001, f"Non-None weight sum should be 0.90, got {non_none_weight}"
 
-        # Therefore flow_score_partial <= 0.75
-        assert result["flow_score_partial"] <= 0.75 + 0.001
+        assert result["flow_score_partial"] <= 0.90 + 0.001
 
 
 class TestDiagnoseWithoutViking:
@@ -96,7 +116,7 @@ class TestDiagnoseWithoutViking:
                 f"EMBEDDING_GAP should not occur without Viking: {diag}"
             )
             assert diag["gap_type"] in (
-                "CONTENT_GAP", "SYNAPSE_GAP", "FRESHNESS_GAP", "FOCUS_GAP"
+                "CONTENT_GAP", "ISOLATION_GAP", "FOCUS_GAP"
             )
             assert "fix" in diag
 

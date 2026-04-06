@@ -1,89 +1,34 @@
-"""neuraltree_score — Compute structural metrics and Flow Score."""
+"""neuraltree_score — Universal organization metrics from knowledge map."""
 from __future__ import annotations
 
 import json
 import os
-import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastmcp import FastMCP
 
-from neuraltree_mcp.text_utils import SKIP_DIRS, is_referenced, walk_project_files
 from neuraltree_mcp.validation import validate_project_root
-FRESHNESS_WINDOW_DAYS = 30
 
-# Flow Score weights (retrieval 50%, structure 35%, maintenance 15%)
+# Flow Score weights — universal organization quality
 WEIGHTS = {
-    "hop_efficiency": 0.25,
-    "precision_at_3": 0.25,
-    "synapse_coverage": 0.20,
-    "dead_neuron_ratio": 0.15,
-    "freshness": 0.10,
-    "trunk_pressure": 0.05,
+    "reachability": 0.30,
+    "connectivity": 0.25,
+    "cluster_coherence": 0.20,
+    "size_balance": 0.15,
+    "discoverability": 0.10,
 }
 
-
-def _find_md_files(root: Path) -> list[Path]:
-    """Find all .md files in the project."""
-    return walk_project_files(root, {".md"})
-
-
-def _has_section(content: str, heading: str) -> bool:
-    """Check if content has a ## heading section."""
-    return bool(re.search(rf'^##\s+{re.escape(heading)}\b', content, re.MULTILINE))
-
-
-def _extract_related_targets(content: str) -> list[str]:
-    """Extract file targets from ## Related section."""
-    targets = []
-    in_related = False
-    for line in content.splitlines():
-        if re.match(r'^##\s+Related\b', line):
-            in_related = True
-            continue
-        if in_related:
-            if line.startswith("## "):
-                break
-            for m in re.finditer(r'\[.*?\]\(([^)]+)\)', line):
-                targets.append(m.group(1))
-    return targets
-
-
-def _parse_last_verified(content: str) -> str | None:
-    """Extract last_verified date from frontmatter."""
-    m = re.search(r'last_verified:\s*(\d{4}-\d{2}-\d{2})', content)
-    return m.group(1) if m else None
-
-
-def _compute_freshness(file_contents: dict[Path, str], md_files: list[Path], root: Path, window_days: int = 30) -> tuple[int, list[str]]:
-    """Compute freshness metric: % of files with last_verified within window."""
-    now = datetime.now(tz=timezone.utc)
-    fresh_count = 0
-    stale_files: list[str] = []
-    for md_file in md_files:
-        content = file_contents.get(md_file)
-        if content is None:
-            stale_files.append(os.path.relpath(md_file, root))
-            continue
-        date_str = _parse_last_verified(content)
-        if date_str:
-            try:
-                verified = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                if (now - verified).days <= window_days:
-                    fresh_count += 1
-                else:
-                    stale_files.append(os.path.relpath(md_file, root))
-            except ValueError:
-                stale_files.append(os.path.relpath(md_file, root))
-    return fresh_count, stale_files
+# Common entry-point filenames (case-insensitive matching)
+ENTRY_POINT_NAMES = {
+    "readme.md", "claude.md", "memory.md", "index.md",
+    "overview.md", "getting-started.md", "introduction.md",
+}
 
 
 def _load_knowledge_map(root: Path) -> dict | None:
     """Load .neuraltree/knowledge_map.json if it exists.
 
-    Returns None if the file doesn't exist, or {"error": "corrupt"} if it
-    exists but cannot be parsed.
+    Returns None if the file doesn't exist, or {"error": "..."} if corrupt.
     """
     km_path = root / ".neuraltree" / "knowledge_map.json"
     if not km_path.exists():
@@ -96,286 +41,195 @@ def _load_knowledge_map(root: Path) -> dict | None:
         return {"error": f"unreadable: {e}"}
 
 
-def _derive_adaptive_thresholds(knowledge_map: dict) -> dict:
-    """Derive adaptive thresholds from knowledge map stats.
-
-    Returns dict with trunk_cap, file_size_cap, freshness_days, and source metadata.
-    """
-    stats = knowledge_map.get("stats", {})
-    total_files = stats.get("total_files", 0)
-    avg_file_size = stats.get("avg_file_size", 0)
-    max_depth = stats.get("max_depth", 2)
-
-    # trunk_cap: base 100, +25 per 100 files, max 300
-    trunk_cap = min(300, 100 + 25 * (total_files // 100))
-
-    # file_size_cap: 2x project avg, min 200, max 800
-    file_size_cap = max(200, min(800, int(avg_file_size * 2)))
-
-    # freshness_days: base 30, +10 per depth level beyond 2
-    extra_depth = max(0, max_depth - 2)
-    freshness_days = 30 + 10 * extra_depth
-
-    return {
-        "trunk_cap": trunk_cap,
-        "file_size_cap": file_size_cap,
-        "freshness_days": freshness_days,
-        "source": "knowledge_map",
-        "total_files": total_files,
-        "avg_file_size": avg_file_size,
-        "max_depth": max_depth,
-    }
+def _detect_entry_points(files: dict) -> list[str]:
+    """Auto-detect entry point files from the knowledge map."""
+    entries = []
+    for path in files:
+        basename = os.path.basename(path).lower()
+        if basename in ENTRY_POINT_NAMES:
+            entries.append(path)
+    return sorted(entries)
 
 
-def _compute_adaptive_trunk_pressure(trunk_lines: int, trunk_cap: int) -> float:
-    """Compute trunk pressure using adaptive cap."""
-    if trunk_lines < trunk_cap * 0.8:
-        return 1.0
-    elif trunk_lines < trunk_cap:
-        return 0.8
-    else:
-        return 0.3
+def _bfs_reachable(entry_points: list[str], edges: list[dict],
+                   all_files: set[str], max_hops: int = 3) -> set[str]:
+    """BFS from entry points using all edges (bidirectional). Returns reachable paths."""
+    adj: dict[str, set[str]] = {}
+    for edge in edges:
+        src, tgt = edge.get("source", ""), edge.get("target", "")
+        if src and tgt:
+            adj.setdefault(src, set()).add(tgt)
+            adj.setdefault(tgt, set()).add(src)
+
+    visited: set[str] = set()
+    frontier = {ep for ep in entry_points if ep in all_files}
+    for _ in range(max_hops + 1):
+        if not frontier:
+            break
+        visited |= frontier
+        next_frontier: set[str] = set()
+        for node in frontier:
+            for neighbor in adj.get(node, set()):
+                if neighbor not in visited and neighbor in all_files:
+                    next_frontier.add(neighbor)
+        frontier = next_frontier
+    return visited
+
+
+def _compute_connectivity(edges: list[dict], all_files: set[str]) -> tuple[float, list[str]]:
+    """What % of files have at least 1 edge? Returns (ratio, orphan_list)."""
+    connected: set[str] = set()
+    for edge in edges:
+        src, tgt = edge.get("source", ""), edge.get("target", "")
+        if src in all_files:
+            connected.add(src)
+        if tgt in all_files:
+            connected.add(tgt)
+
+    orphans = sorted(all_files - connected)
+    ratio = len(connected) / max(len(all_files), 1)
+    return ratio, orphans
+
+
+def _compute_cluster_coherence(clusters: list[dict]) -> float:
+    """For multi-file clusters, what fraction of file pairs share a parent directory?"""
+    multi = [c for c in clusters if len(c.get("files", [])) >= 2]
+    if not multi:
+        return 1.0  # all singletons = trivially coherent
+
+    total_pairs = 0
+    coherent_pairs = 0
+    for cluster in multi:
+        files = cluster["files"]
+        for i in range(len(files)):
+            for j in range(i + 1, len(files)):
+                total_pairs += 1
+                dir_a = os.path.dirname(files[i]) or "."
+                dir_b = os.path.dirname(files[j]) or "."
+                if dir_a == dir_b:
+                    coherent_pairs += 1
+
+    return coherent_pairs / max(total_pairs, 1)
+
+
+def _compute_size_balance(files: dict, multiplier: float = 3.0) -> tuple[float, list[str]]:
+    """What % of files are within multiplier × median size? Returns (ratio, oversized_list)."""
+    sizes = [(path, f.get("size_lines", 0))
+             for path, f in files.items()
+             if f.get("size_lines", 0) > 0]
+    if not sizes:
+        return 1.0, []
+
+    sorted_sizes = sorted(s for _, s in sizes)
+    median = sorted_sizes[len(sorted_sizes) // 2]
+    cap = max(median * multiplier, 50)  # min 50 lines to avoid penalizing tiny projects
+
+    oversized = sorted(path for path, size in sizes if size > cap)
+    balanced = (len(sizes) - len(oversized)) / len(sizes)
+    return balanced, oversized
 
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def neuraltree_score(project_root: str = ".", trunk_paths: list[str] | None = None, adaptive: bool = False) -> dict:
-        """Compute 4 structural metrics + trunk pressure for the neural tree.
+        """Compute universal organization metrics from the knowledge map.
 
-        Metrics computed (0.0 - 1.0 each):
-        - hop_efficiency: How efficiently trunk->index->leaf navigation works.
-        - synapse_coverage: % of .md files with ## Related pointing to alive targets.
-        - dead_neuron_ratio: 1 - (orphans / total). Higher = fewer dead files.
-        - freshness: % of files with last_verified within 30 days.
-        - trunk_pressure: Trunk line count vs 100-line cap.
+        Metrics (0.0 - 1.0 each):
+        - reachability: % of files reachable in ≤3 hops from entry points via any edge.
+        - connectivity: % of files with at least 1 edge (not orphaned).
+        - cluster_coherence: % of related-file pairs that share a parent directory.
+        - size_balance: % of files within 3× median size (no mega-files).
+        - discoverability: precision@3 from Viking search (computed by Skill, null here).
 
-        Note: precision_at_3 requires Viking (computed by the Skill, not here).
-        It's included in the output as null for the Skill to fill in.
+        Requires a knowledge map (.neuraltree/knowledge_map.json).
+        Run explore + map phases first if no map exists.
 
         Args:
             project_root: Project root directory.
-            trunk_paths: Paths to trunk files (MEMORY.md, CLAUDE.md). Auto-detected if None.
-            adaptive: If True, derive thresholds from .neuraltree/knowledge_map.json
-                      instead of using hardcoded values.
+            trunk_paths: Override entry-point detection with explicit paths.
+            adaptive: Ignored (kept for API compatibility). Metrics are always
+                      derived from the knowledge map.
 
         Returns:
-            dict with individual metrics, flow_score (partial, without precision_at_3),
-            and details for each metric. When adaptive=True, includes adaptive_context.
+            dict with metrics, flow_score_partial, details, and warnings.
         """
         try:
             root = validate_project_root(project_root)
         except ValueError as e:
-            return {"error": str(e), "flow_score": 0.0}
-        md_files = _find_md_files(root)
+            return {"error": str(e), "flow_score_partial": 0.0}
 
-        if not md_files:
-            return {"error": "No .md files found", "flow_score": 0.0}
+        km = _load_knowledge_map(root)
+        if km is None:
+            return {"error": "No knowledge map. Run explore + map first.",
+                    "flow_score_partial": 0.0}
+        if "error" in km:
+            return {"error": f"Knowledge map {km['error']}",
+                    "flow_score_partial": 0.0}
 
-        # --- Single-pass file content cache ---
-        # Read all .md files once; reuse across all metric computations
-        file_contents: dict[Path, str] = {}
+        files = km.get("files", {})
+        edges = km.get("edges", [])
+        clusters = km.get("clusters", [])
         warnings: list[str] = []
-        for md_file in md_files:
-            try:
-                file_contents[md_file] = md_file.read_text(encoding="utf-8", errors="replace")
-            except OSError as e:
-                warnings.append(f"Could not read {os.path.relpath(md_file, root)}: {e}")
 
-        # --- Hop Efficiency ---
-        # Check: trunk exists, trunk links to indexes, indexes link to leaves
-        trunks = trunk_paths or []
-        if not trunks:
-            for candidate in ["memory/MEMORY.md", "MEMORY.md", "CLAUDE.md"]:
-                if (root / candidate).exists():
-                    trunks.append(candidate)
+        if not files:
+            return {"error": "Knowledge map has no files", "flow_score_partial": 0.0}
 
-        # Count how many .md files are reachable in 0-2 hops from trunks
-        # Only count RESOLVED, EXISTING .md files (not raw link strings)
-        hop_0_files: set[str] = set()  # resolved paths relative to root
-        hop_1_files: set[str] = set()
-        hop_2_files: set[str] = set()
+        all_file_paths = set(files.keys())
 
-        for tp in trunks:
-            trunk_file = root / tp
-            if not trunk_file.exists():
-                continue
-            hop_0_files.add(str(trunk_file.resolve()))
-            try:
-                content = trunk_file.read_text(encoding="utf-8", errors="replace")
-            except OSError as e:
-                warnings.append(f"Could not read trunk {tp}: {e}")
-                continue
-            for m in re.finditer(r'\[.*?\]\(([^)]+)\)', content):
-                linked = m.group(1)
-                # Skip external links and anchors
-                if linked.startswith("http") or linked.startswith("#"):
-                    continue
-                linked_path = (trunk_file.parent / linked).resolve()
-                if linked_path.exists() and linked_path.suffix == ".md":
-                    hop_1_files.add(str(linked_path))
-                    # Follow one more hop
-                    try:
-                        linked_content = linked_path.read_text(encoding="utf-8", errors="replace")
-                        for m2 in re.finditer(r'\[.*?\]\(([^)]+)\)', linked_content):
-                            linked2 = m2.group(1)
-                            if linked2.startswith("http") or linked2.startswith("#"):
-                                continue
-                            linked2_path = (linked_path.parent / linked2).resolve()
-                            if linked2_path.exists() and linked2_path.suffix == ".md":
-                                hop_2_files.add(str(linked2_path))
-                    except OSError as e:
-                        warnings.append(f"Could not read {linked_path}: {e}")
-
-        total_md = len(md_files)
-        all_reachable = hop_0_files | hop_1_files | hop_2_files
-        reachable = len(all_reachable)
-        hop_efficiency = min(1.0, reachable / max(total_md, 1))
-
-        # --- Synapse Coverage ---
-        wired_count = 0
-        total_leaves = 0
-        synapse_details = []
-
-        for md_file in md_files:
-            content = file_contents.get(md_file)
-            if content is None:
-                continue
-
-            if _has_section(content, "Related"):
-                targets = _extract_related_targets(content)
-                alive_targets = []
-                for t in targets:
-                    target_path = md_file.parent / t
-                    if target_path.exists():
-                        alive_targets.append(t)
-
-                if alive_targets:
-                    wired_count += 1
-                else:
-                    synapse_details.append(f"{os.path.relpath(md_file, root)}: ## Related has dead targets")
-            total_leaves += 1
-
-        synapse_coverage = wired_count / max(total_leaves, 1)
-
-        # --- Dead Neuron Ratio ---
-        # For each .md file, check if ANY other file references it
-        orphans = []
-        all_contents: dict[str, str] = {
-            os.path.relpath(md_file, root): content
-            for md_file, content in file_contents.items()
-        }
-
-        for rel_path in all_contents:
-            basename = Path(rel_path).name
-            found = False
-            for other_path, other_content in all_contents.items():
-                if other_path == rel_path:
-                    continue
-                if is_referenced(basename, rel_path, other_content):
-                    found = True
-                    break
-            if not found:
-                orphans.append(rel_path)
-
-        dead_neuron_ratio = 1.0 - (len(orphans) / max(len(all_contents), 1))
-
-        # --- Freshness ---
-        fresh_count, stale_files = _compute_freshness(file_contents, md_files, root, FRESHNESS_WINDOW_DAYS)
-        freshness = fresh_count / max(total_md, 1)
-
-        # --- Trunk Pressure ---
-        trunk_lines = 0
-        for tp in trunks:
-            trunk_file = root / tp
-            if trunk_file.exists():
-                try:
-                    trunk_lines += len(trunk_file.read_text(encoding="utf-8", errors="replace").splitlines())
-                except OSError as e:
-                    warnings.append(f"Could not read trunk {tp}: {e}")
-
-        # --- Adaptive mode: derive thresholds from knowledge map ---
-        adaptive_context: dict | None = None
-        trunk_pressure: float = 0.3  # safe default before branching logic
-        if adaptive:
-            knowledge_map = _load_knowledge_map(root)
-            if knowledge_map is not None and "error" not in knowledge_map:
-                thresholds = _derive_adaptive_thresholds(knowledge_map)
-                trunk_pressure = _compute_adaptive_trunk_pressure(trunk_lines, thresholds["trunk_cap"])
-                # Override freshness window for adaptive freshness recomputation
-                adaptive_freshness_days = thresholds["freshness_days"]
-                if adaptive_freshness_days != FRESHNESS_WINDOW_DAYS:
-                    fresh_count, stale_files = _compute_freshness(file_contents, md_files, root, adaptive_freshness_days)
-                    freshness = fresh_count / max(total_md, 1)
-                adaptive_context = {
-                    "source": "knowledge_map",
-                    "thresholds": {
-                        "trunk_cap": thresholds["trunk_cap"],
-                        "file_size_cap": thresholds["file_size_cap"],
-                        "freshness_days": thresholds["freshness_days"],
-                    },
-                    "derived_from": {
-                        "total_files": thresholds["total_files"],
-                        "avg_file_size": thresholds["avg_file_size"],
-                        "max_depth": thresholds["max_depth"],
-                    },
-                }
-            else:
-                # No knowledge map or corrupt — fall back to static thresholds
-                if knowledge_map is None:
-                    reason = "no knowledge_map"
-                else:
-                    err_msg = knowledge_map.get("error", "")
-                    reason = "unreadable knowledge_map" if err_msg.startswith("unreadable") else "corrupt knowledge_map"
-                adaptive_context = {"source": "static", "reason": reason}
-                # Use standard static trunk pressure
-                if trunk_lines < 80:
-                    trunk_pressure = 1.0
-                elif trunk_lines < 100:
-                    trunk_pressure = 0.8
-                else:
-                    trunk_pressure = 0.3
+        # --- Entry points ---
+        if trunk_paths:
+            entry_points = [tp for tp in trunk_paths if tp in all_file_paths]
         else:
-            # Static mode (default) — hardcoded thresholds
-            if trunk_lines < 80:
-                trunk_pressure = 1.0
-            elif trunk_lines < 100:
-                trunk_pressure = 0.8
-            else:
-                trunk_pressure = 0.3
+            entry_points = _detect_entry_points(files)
 
-        # --- Flow Score (partial — without precision_at_3) ---
+        if not entry_points:
+            warnings.append("No entry points detected — reachability will be 0")
+
+        # --- Reachability ---
+        reachable = _bfs_reachable(entry_points, edges, all_file_paths, max_hops=3)
+        reachability = len(reachable) / max(len(all_file_paths), 1)
+        unreachable = sorted(all_file_paths - reachable)
+
+        # --- Connectivity ---
+        connectivity, orphans = _compute_connectivity(edges, all_file_paths)
+
+        # --- Cluster Coherence ---
+        cluster_coherence = _compute_cluster_coherence(clusters)
+
+        # --- Size Balance ---
+        size_balance, oversized = _compute_size_balance(files)
+
+        # --- Discoverability (filled by Skill via Viking) ---
+        discoverability = None
+
+        # --- Flow Score ---
         metrics = {
-            "hop_efficiency": round(hop_efficiency, 3),
-            "precision_at_3": None,  # Filled by Skill via Viking
-            "synapse_coverage": round(synapse_coverage, 3),
-            "dead_neuron_ratio": round(dead_neuron_ratio, 3),
-            "freshness": round(freshness, 3),
-            "trunk_pressure": round(trunk_pressure, 3),
+            "reachability": round(reachability, 3),
+            "connectivity": round(connectivity, 3),
+            "cluster_coherence": round(cluster_coherence, 3),
+            "size_balance": round(size_balance, 3),
+            "discoverability": discoverability,
         }
 
-        # Partial flow score (precision_at_3 treated as 0 until Skill fills it)
         partial_flow = sum(
             metrics[k] * WEIGHTS[k]
             for k in WEIGHTS
             if metrics[k] is not None
         )
 
-        result = {
+        return {
             "metrics": metrics,
             "flow_score_partial": round(partial_flow, 3),
             "flow_score_weights": WEIGHTS,
             "details": {
-                "total_md_files": total_md,
-                "reachable_in_2_hops": reachable,
-                "wired_files": wired_count,
+                "total_files": len(all_file_paths),
+                "entry_points": entry_points,
+                "reachable_in_3_hops": len(reachable),
+                "unreachable_files": unreachable,
                 "orphan_files": orphans,
-                "stale_files": stale_files,
-                "trunk_lines": trunk_lines,
+                "oversized_files": oversized,
+                "cluster_count": len(clusters),
+                "multi_file_clusters": len([c for c in clusters if len(c.get("files", [])) >= 2]),
             },
             "warnings": warnings,
         }
-
-        if adaptive_context is not None:
-            result["adaptive_context"] = adaptive_context
-
-        return result
