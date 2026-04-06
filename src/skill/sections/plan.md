@@ -67,12 +67,14 @@ approved_actions = []
 for action in auto_fixable:
     approved_actions.append(action)
 
+rejected = 0
 for action in needs_approval:
     emit(action["description"])
     response = wait_for_user_input()
     if "y" in response.lower():
         approved_actions.append(action)
     else:
+        rejected += 1
         action["status"] = "rejected"
 
 emit(f"Phase 4/6: {len(approved_actions)} actions approved, {rejected} rejected")

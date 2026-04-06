@@ -19,7 +19,10 @@ def call_tool(name: str, args: dict) -> dict:
     if hasattr(result, "content"):
         for block in result.content:
             if hasattr(block, "text"):
-                return json.loads(block.text)
+                try:
+                    return json.loads(block.text)
+                except json.JSONDecodeError:
+                    return {"raw": block.text}
     return result
 
 

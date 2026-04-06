@@ -8,13 +8,13 @@
 
 ## Current Status
 
-**COMPLETE.** 25 MCP tools (308+ tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 25 MCP tools (345 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
 Skill (SKILL.md) = THE BRAIN — explore-first orchestration
-MCP Server (neuraltree-mcp) = THE MUSCLE — 25 tools, 308+ tests
+MCP Server (neuraltree-mcp) = THE MUSCLE — 25 tools, 345 tests
 Viking MCP = THE MEMORY — semantic search
 Agent Swarm = THE EYES — 2-10 parallel explorers
 Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
@@ -68,7 +68,7 @@ neuraltree/
 │           ├── execute.md       Phase 5: sandbox execution
 │           ├── verify.md        Phase 6: adaptive scoring
 │           └── report.md        Output: before/after comparison
-├── tests/                       308 tests passing
+├── tests/                       345 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
@@ -112,7 +112,7 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (308 passing)
+# Run tests (345 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Verify all 25 tools load

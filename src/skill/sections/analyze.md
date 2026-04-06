@@ -77,6 +77,10 @@ analysis = {
     "summary": "One paragraph summary of the project's organizational health",
 }
 
+high = analysis["by_severity"]["high"]
+medium = analysis["by_severity"]["medium"]
+low = analysis["by_severity"]["low"]
+
 emit(f"Phase 3/6: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
 ```
 
