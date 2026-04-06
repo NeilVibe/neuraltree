@@ -5,6 +5,8 @@
 ## Report Format
 
 ```
+elapsed = f"{(time.time() - start_time):.0f}s"  # start_time set during activation
+
 /neuraltree — Execution Report
 ═══════════════════════════════
 

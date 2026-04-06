@@ -26,6 +26,7 @@ neuraltree_backup(files=sorted(all_files), project_root=sandbox_root)
 Process in order: wire first, then move, then split, then delete.
 
 ```
+ACTION_ORDER = {"wire": 0, "add_frontmatter": 1, "add_index": 2, "move": 3, "split": 4, "shrink": 5, "delete": 6}
 for action in sorted(approved_actions, key=lambda a: ACTION_ORDER[a["type"]]):
     emit(f"  Executing: {action['description']}")
 

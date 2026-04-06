@@ -163,6 +163,7 @@ for cluster in clusters:
 
 ```
 import statistics
+project_name = os.path.basename(os.path.abspath("."))
 file_sizes = [d.get("size_lines", 0) for d in files.values()]
 
 knowledge_map = {
