@@ -1,12 +1,17 @@
-"""neuraltree_knowledge_map — Save, load, and query a dual-layer knowledge map."""
+"""neuraltree_knowledge_map — Save, load, query, and build a dual-layer knowledge map."""
 from __future__ import annotations
 
 import json
+import os
+import statistics
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 
+from neuraltree_mcp.text_utils import jaccard
 from neuraltree_mcp.validation import validate_project_root
 
 
@@ -34,6 +39,233 @@ def _validate_map_paths(knowledge_map: dict) -> str | None:
             if _has_path_traversal(val):
                 return f"Invalid edge {key} path in knowledge map: {val}"
     return None
+
+
+def _ensure_list(value: Any, field_name: str) -> list:
+    """Coerce a value to a list. Strings are wrapped, non-iterables become empty list."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [value]
+    return []
+
+
+def _build_map(explorer_reports: list[dict], project_root: str) -> dict:
+    """Build a complete knowledge map from explorer reports.
+
+    Deterministically computes:
+    - Merged file inventory from all explorer reports
+    - Reference edges (explicit references between known files)
+    - Semantic edges (Jaccard similarity on key_concepts, threshold > 0.3, overlap >= 2)
+    - Co-location edges (same directory, only if no stronger edge exists)
+    - Greedy concept clusters (seed by most concepts, expand by 2+ shared)
+    - Graph-derived issues (orphans, scattered clusters)
+    - Summary stats
+
+    Args:
+        explorer_reports: List of explorer report dicts, each with "files",
+                          "directories", and optionally "observations" keys.
+                          Each file entry must have at least "path".
+        project_root: Project root directory (for project_name).
+
+    Returns:
+        Complete knowledge map dict ready for _save_map().
+    """
+    # Step 1: Merge file reports (union concepts/refs/issues across agents)
+    files: dict[str, dict] = {}
+    warnings: list[str] = []
+    for report in explorer_reports:
+        for file_report in report.get("files", []):
+            path = file_report.get("path", "")
+            if not path:
+                continue
+            if _has_path_traversal(path):
+                warnings.append(f"Skipped path traversal: {path}")
+                continue
+            # Coerce list fields to prevent character-level iteration on strings
+            file_report["key_concepts"] = _ensure_list(file_report.get("key_concepts"), "key_concepts")
+            file_report["references_to"] = _ensure_list(file_report.get("references_to"), "references_to")
+            file_report["issues"] = _ensure_list(file_report.get("issues"), "issues")
+            if path in files:
+                # Merge: union concepts, refs, issues from multiple agents
+                existing = files[path]
+                existing["key_concepts"] = sorted(set(existing.get("key_concepts", []))
+                                                  | set(file_report.get("key_concepts", [])))
+                existing["references_to"] = sorted(set(existing.get("references_to", []))
+                                                   | set(file_report.get("references_to", [])))
+                existing["issues"] = list({*existing.get("issues", []), *file_report.get("issues", [])})
+                # Keep larger size_lines
+                existing["size_lines"] = max(
+                    existing.get("size_lines", 0),
+                    file_report.get("size_lines", 0),
+                )
+            else:
+                files[path] = file_report
+
+    # Step 2A: Reference edges (only between known files)
+    # Reference edges are directional: A→B and B→A are both valid.
+    edges: list[dict] = []
+    ref_set: set[tuple[str, str]] = set()  # dedup same-direction refs only
+    for path, file_data in files.items():
+        for ref in file_data.get("references_to", []):
+            if ref in files and ref != path:
+                pair = (path, ref)
+                if pair not in ref_set:
+                    edges.append({
+                        "source": path,
+                        "target": ref,
+                        "type": "reference",
+                        "weight": 1.0,
+                    })
+                    ref_set.add(pair)
+
+    # Step 2B: Semantic edges (pairwise Jaccard on key_concepts)
+    # Semantic edges coexist with reference edges — different information.
+    sem_set: set[tuple[str, str]] = set()
+    file_paths = sorted(files.keys())
+    for i, path_a in enumerate(file_paths):
+        concepts_a = set(files[path_a].get("key_concepts", []))
+        if not concepts_a:
+            continue
+        for path_b in file_paths[i + 1:]:
+            concepts_b = set(files[path_b].get("key_concepts", []))
+            if not concepts_b:
+                continue
+            overlap = concepts_a & concepts_b
+            if len(overlap) >= 2:
+                score = jaccard(concepts_a, concepts_b)
+                if score > 0.3:
+                    pair_ab = (path_a, path_b)
+                    if pair_ab not in sem_set:
+                        edges.append({
+                            "source": path_a,
+                            "target": path_b,
+                            "type": "semantic",
+                            "weight": round(score, 3),
+                            "shared_concepts": sorted(overlap),
+                        })
+                        sem_set.add(pair_ab)
+
+    # Step 2C: Co-location edges (same directory, only if no stronger edge exists)
+    # "Stronger" means any reference or semantic edge between the pair.
+    all_connected: set[tuple[str, str]] = set()
+    for e in edges:
+        all_connected.add((e["source"], e["target"]))
+        all_connected.add((e["target"], e["source"]))
+
+    dir_groups: dict[str, list[str]] = defaultdict(list)
+    for path in files:
+        dir_groups[os.path.dirname(path) or "."].append(path)
+
+    for members in dir_groups.values():
+        if len(members) <= 1:
+            continue
+        sorted_members = sorted(members)
+        for i, a in enumerate(sorted_members):
+            for b in sorted_members[i + 1:]:
+                if (a, b) not in all_connected:
+                    edges.append({
+                        "source": a,
+                        "target": b,
+                        "type": "co-located",
+                        "weight": 0.5,
+                    })
+
+    # Step 3: Greedy concept clustering
+    unclustered = set(files.keys())
+    clusters: list[dict] = []
+
+    while unclustered:
+        # Seed: file with most concepts (sorted for deterministic tie-breaking)
+        seed = max(sorted(unclustered), key=lambda p: len(files[p].get("key_concepts", [])))
+        cluster_files = {seed}
+        seed_concepts = set(files[seed].get("key_concepts", []))
+
+        # Expand: add files sharing 2+ concepts with the growing cluster
+        for other in sorted(unclustered):
+            if other == seed:
+                continue
+            other_concepts = set(files[other].get("key_concepts", []))
+            if len(seed_concepts & other_concepts) >= 2:
+                cluster_files.add(other)
+                seed_concepts |= other_concepts
+
+        # Name from top concepts
+        concept_counts: Counter = Counter()
+        for f in cluster_files:
+            concept_counts.update(files[f].get("key_concepts", []))
+        top_concepts = [c for c, _ in concept_counts.most_common(3)]
+        cluster_name = "_".join(top_concepts[:2]) if top_concepts else "unnamed"
+
+        clusters.append({
+            "name": cluster_name,
+            "concept": ", ".join(top_concepts),
+            "files": sorted(cluster_files),
+        })
+        unclustered -= cluster_files
+
+    # Step 4: Graph-derived issues
+    issues: list[dict] = []
+
+    # Issues from explorer file reports
+    for path, data in files.items():
+        for issue_desc in data.get("issues", []):
+            issues.append({
+                "type": "explorer_finding",
+                "file": path,
+                "description": issue_desc,
+                "severity": "medium",
+            })
+
+    # Orphan files (no edges at all)
+    connected = {e["source"] for e in edges} | {e["target"] for e in edges}
+    for path in sorted(files.keys()):
+        if path not in connected:
+            issues.append({
+                "type": "orphan",
+                "file": path,
+                "description": f"{path} has no connections to any other file",
+                "severity": "high",
+            })
+
+    # Scattered clusters (spanning 3+ directories)
+    for cluster in clusters:
+        dirs_in_cluster = {os.path.dirname(f) or "." for f in cluster["files"]}
+        if len(dirs_in_cluster) >= 3:
+            issues.append({
+                "type": "scattered_cluster",
+                "cluster": cluster["name"],
+                "description": (
+                    f"Cluster '{cluster['name']}' spans {len(dirs_in_cluster)} "
+                    f"directories: {sorted(dirs_in_cluster)}"
+                ),
+                "severity": "medium",
+            })
+
+    # Step 5: Stats (only count files that reported size_lines > 0)
+    file_sizes = [d.get("size_lines", 0) for d in files.values() if d.get("size_lines", 0) > 0]
+    max_depth = max((f.count("/") for f in files), default=0)
+
+    knowledge_map = {
+        "version": 2,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "project_name": os.path.basename(os.path.abspath(project_root)),
+        "files": files,
+        "edges": edges,
+        "clusters": clusters,
+        "issues": issues,
+        "warnings": warnings,
+        "stats": {
+            "total_files": len(files),
+            "total_edges": len(edges),
+            "total_clusters": len(clusters),
+            "total_issues": len(issues),
+            "avg_file_size": round(statistics.mean(file_sizes)) if file_sizes else 0,
+            "median_file_size": round(statistics.median(file_sizes)) if file_sizes else 0,
+            "max_depth": max_depth,
+        },
+    }
+    return knowledge_map
 
 
 def _save_map(knowledge_map: dict, project_root: str) -> Path:
@@ -163,14 +395,19 @@ def register(mcp: FastMCP) -> None:
         action: str,
         project_root: str = ".",
         knowledge_map: dict | None = None,
+        explorer_reports: list[dict] | None = None,
         file_path: str | None = None,
         cluster: str | None = None,
         neighbors_of: str | None = None,
         issues_only: bool = False,
     ) -> dict:
-        """Save, load, or query a dual-layer knowledge map (file graph + concept clusters).
+        """Save, load, query, or build a dual-layer knowledge map (file graph + concept clusters).
 
         Actions:
+          - build: Deterministically compute a knowledge map from explorer reports.
+                   Computes edges (reference + semantic Jaccard + co-location),
+                   greedy concept clusters, orphan detection, and stats.
+                   Saves the result automatically.
           - save: Persist a knowledge map to .neuraltree/knowledge_map.json
           - load: Load the knowledge map from disk
           - query: Query by file_path, cluster, neighbors_of, or issues_only
@@ -179,9 +416,10 @@ def register(mcp: FastMCP) -> None:
         priority: file_path > cluster > neighbors_of > issues_only.
 
         Args:
-            action: One of 'save', 'load', 'query'.
+            action: One of 'build', 'save', 'load', 'query'.
             project_root: Project root directory.
             knowledge_map: The map dict to save (required for 'save' action).
+            explorer_reports: List of explorer report dicts (required for 'build' action).
             file_path: Query filter — return data for a specific file.
             cluster: Query filter — return data for a specific cluster by name.
             neighbors_of: Query filter — return all connected files (both directions).
@@ -195,7 +433,26 @@ def register(mcp: FastMCP) -> None:
         except (ValueError, OSError) as e:
             return {"error": str(e)}
 
-        if action == "save":
+        if action == "build":
+            if explorer_reports is None:
+                return {"error": "explorer_reports is required for build action"}
+            if not isinstance(explorer_reports, list):
+                return {"error": "explorer_reports must be a list of report dicts"}
+            try:
+                km = _build_map(explorer_reports, project_root)
+                path = _save_map(km, project_root)
+                return {
+                    "saved": str(path),
+                    "knowledge_map": km,
+                    "stats": km["stats"],
+                    "warnings": km.get("warnings", []),
+                }
+            except (OSError, ValueError) as e:
+                return {"error": f"Failed to build map: {e}"}
+            except (TypeError, KeyError, AttributeError) as e:
+                return {"error": f"Malformed explorer report: {type(e).__name__}: {e}"}
+
+        elif action == "save":
             if knowledge_map is None:
                 return {"error": "knowledge_map is required for save action"}
             try:
@@ -222,4 +479,4 @@ def register(mcp: FastMCP) -> None:
             )
 
         else:
-            return {"error": f"Unknown action: {action}. Use 'save', 'load', or 'query'."}
+            return {"error": f"Unknown action: {action}. Use 'build', 'save', 'load', or 'query'."}

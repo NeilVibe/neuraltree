@@ -9,22 +9,22 @@ NeuralTree transforms any project into a structured information system where any
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  /neuraltree                         │
-│              THE BRAIN (Skill)                       │
-│   Orchestrator — benchmarks, diagnoses,              │
-│   auto-repairs, enforces. You invoke it, it drives.  │
-├──────────────┬──────────────────┬───────────────────┤
-│ neuraltree   │  Viking MCP      │  Claude           │
-│ THE MUSCLE   │  THE MEMORY      │  THE JUDGE        │
-│ 25 tools     │  Semantic search │  YES/NO relevance │
-│ scan, score, │  across all      │  judgments for     │
-│ wire, diag,  │  indexed content │  Precision@3 via  │
-│ sandbox...   │                  │  sequential-think  │
-└──────────────┴──────────────────┴───────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    /neuraltree                           │
+│                THE BRAIN (Skill)                         │
+│   Orchestrator — explores, maps, analyzes, reorganizes.  │
+│   You invoke it, it drives.                              │
+├──────────────┬──────────────┬──────────────┬────────────┤
+│ neuraltree   │ Viking MCP   │ Agent Swarm  │ Claude     │
+│ THE MUSCLE   │ THE MEMORY   │ THE EYES     │ THE JUDGE  │
+│ 25 tools     │ Semantic     │ 2-10 parallel│ Reasoning  │
+│ scan, score, │ search all   │ explorers    │ analysis   │
+│ wire, map,   │ indexed      │ read project │ (no hard-  │
+│ sandbox...   │ content      │ deeply       │ coded math)│
+└──────────────┴──────────────┴──────────────┴────────────┘
 ```
 
-**Brain** orchestrates everything. **Muscle** does pure computation (filesystem scans, scoring, wiring). **Memory** provides semantic search. **Judge** evaluates retrieval quality. The Brain is the only component that calls the other three.
+**Brain** orchestrates everything. **Muscle** does computation (filesystem scans, scoring, wiring, knowledge maps). **Memory** provides semantic search. **Eyes** are explorer agents that read the project deeply in parallel. **Judge** reasons about what's wrong — no hardcoded formulas.
 
 ---
 
@@ -50,7 +50,7 @@ The install script will:
 /neuraltree
 ```
 
-That's it. NeuralTree detects it's a first run (bootstrap mode), scans your project, generates test queries, benchmarks information flow, diagnoses gaps, auto-repairs what it can in a sandbox, and produces a report.
+That's it. NeuralTree detects it's a first run (full mode), launches parallel explorer agents to understand your project deeply, builds a knowledge map, reasons about what's wrong, proposes fixes, executes them in a sandbox, and produces a before/after report.
 
 ---
 
@@ -127,38 +127,39 @@ The Flow Score is a single number (0.0-1.0) that tells you whether information i
 | Command | Pipeline | Description |
 |---------|----------|-------------|
 | `/neuraltree` | Auto-detected | Detects mode from project state and runs the appropriate pipeline. |
-| `/neuraltree audit` | Benchmark only | Read-only analysis. Outputs Flow Score + gap report. No changes. |
-| `/neuraltree fix` | Diagnose + AutoLoop | Skip benchmarking, jump straight to fixing diagnosed gaps. |
-| `/neuraltree enforce` | Enforce only | Update state, re-index Viking, clean temp files. No analysis. |
-| `/neuraltree benchmark` | Full benchmark | Detailed scoring with per-metric breakdown and precision analysis. |
-| `/neuraltree auto` | Full pipeline | Benchmark, Diagnose, AutoLoop, Enforce. Always runs everything. |
+| `/neuraltree explore` | Explore + Map | Deep parallel exploration and knowledge map generation only. |
+| `/neuraltree analyze` | Analyze only | Uses existing knowledge map to identify issues. |
+| `/neuraltree fix` | Analyze → Plan → Execute → Verify | Jump straight to fixing — requires existing knowledge map. |
+| `/neuraltree verify` | Verify only | Quick re-score with adaptive thresholds. |
+| `/neuraltree map` | Show map | Display knowledge map summary (concept clusters, file graph). |
+| `/neuraltree auto` | Full pipeline | Explore → Map → Analyze → Plan → Execute → Verify. Always runs everything. |
 
 ---
 
 ## How It Works
 
-### The Pipeline
+### The Pipeline (v2 — Explore-First)
 
 ```
-1. ACTIVATE    Verify tools, detect mode, acquire lock
-2. BENCHMARK   Generate queries, search Viking, judge precision, compute Flow Score
-3. DIAGNOSE    Classify each failure — SYNAPSE_GAP, DEAD_NEURON, EMBEDDING_GAP, etc.
-4. AUTOLOOP    Karpathy-style loop: predict improvement, apply fix, measure, keep/discard
-5. ENFORCE     Update state.json, re-index Viking, record lessons, emit report
+1. ACTIVATE    Verify tools, detect mode, acquire lock, scale agent count to project size
+2. EXPLORE     Launch 2-10 parallel explorer agents — each reads a directory slice deeply
+3. MAP         Synthesize explorer reports into dual-layer knowledge map (file graph + concept clusters)
+4. ANALYZE     Claude reads the map and REASONS about what's wrong — no hardcoded formulas
+5. PLAN        Propose concrete reorganization actions — user approves per-item
+6. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
+7. VERIFY      Adaptive scoring confirms improvement — thresholds derived from project shape
 ```
 
-### The AutoLoop
+### Explore-First vs Metric-First
 
-The AutoLoop is NeuralTree's self-repair engine. It runs in a **sandbox** (isolated git worktree) so it never touches your real project until changes are verified:
+v1 scored first, then fixed what the formula said. v2 **understands first**:
 
-1. **Predict** — For each diagnosed gap, predict how much fixing it will improve the Flow Score
-2. **Prioritize** — Sort by predicted improvement, work on the highest-impact gap first
-3. **Fix** — Apply the repair (add cross-references, re-index, update frontmatter)
-4. **Measure** — Re-score in the sandbox. Did the Flow Score actually improve?
-5. **Decide** — KEEP (improvement confirmed), DISCARD (no improvement), or HOLD (needs human review)
-6. **Repeat** — Up to 10 iterations, stopping early if the score converges or hits 0.95+
+- **Explorer agents** read every knowledge file, not just scan metadata
+- **Knowledge map** captures both structure (file graph) and meaning (concept clusters)
+- **Claude reasons** about gaps instead of following hardcoded weights
+- **Adaptive scoring** derives thresholds from the project's actual shape, not fixed numbers
 
-Safe actions (wiring, indexing) are applied automatically. Destructive actions (deletes, moves) are always held for your approval.
+Safe actions (wiring, indexing) are applied automatically. Destructive actions (deletes, moves, splits) are always held for your approval. All changes happen in a **sandbox** (isolated git worktree) first.
 
 ---
 
@@ -167,34 +168,31 @@ Safe actions (wiring, indexing) are applied automatically. Destructive actions (
 ```
 ═══════════════════════════════════════════════════
   NeuralTree Report — my-project
-  Mode: bootstrap | Duration: 127s
+  Mode: full | Agents: 5 | Duration: 94s
 ═══════════════════════════════════════════════════
 
-Flow Score: 0.41 -> 0.87 (+0.46)
+Knowledge Map: 47 files → 8 concept clusters
+  ├── API Layer (12 files) — well-connected
+  ├── Database (8 files) — isolated island
+  ├── Auth (6 files) — missing cross-refs to API
+  └── ... 5 more clusters
 
-┌──────────────────────────────────────────────────┐
-│ Metric              Before   After    Delta      │
-│ Hop Efficiency       0.45    0.88    +0.43       │
-│ Precision@3          0.33    0.87    +0.54       │
-│ Synapse Coverage     0.61    0.97    +0.36       │
-│ Dead Neuron Ratio    0.70    1.00    +0.30       │
-│ Freshness            0.80    0.95    +0.15       │
-│ Trunk Pressure       0.80    1.00    +0.20       │
-└──────────────────────────────────────────────────┘
+Issues Found: 4
+  1. CRITICAL  Database cluster has 0 inbound links from API layer
+  2. HIGH      Auth middleware not referenced by any route handler docs
+  3. MEDIUM    3 orphan files in docs/archive/ — never referenced
+  4. LOW       2 index files over 100 lines (trunk pressure)
+
+Flow Score: 0.52 → 0.81 (+0.29)  [adaptive thresholds]
 
 SAFE ACTIONS (executed — non-destructive):
-  + memory/rules/build_rules.md — added ## Related (3 synapses)
-  + memory/active/phase3.md — re-indexed in Viking
-  + docs/architecture/overview.md — added ## Related (5 synapses)
+  + docs/database/schema.md — added ## Related (4 synapses to API layer)
+  + docs/auth/middleware.md — wired to routes/protected.md
+  + docs/api/_INDEX.md — regenerated (was 142 lines, now 67)
 
 PENDING ACTIONS (require approval — destructive):
-  1. ! CREATE memory/reference/api_patterns.md — content gap: no API documentation
-  2. ! SPLIT docs/MONOLITH.md — focus gap: 340 lines, 6 distinct topics
-
-AutoLoop: 7 iterations, 5 KEEP / 2 DISCARD / 2 HOLD
-Calibration accuracy: 72%
-Exit reason: converged (delta < 0.005 for 3 iterations)
-Next run ETA: 3 days (health-check)
+  1. ! MOVE docs/archive/old-api-notes.md → docs/api/migration-notes.md
+  2. ! DELETE docs/archive/draft-v0.md — confirmed dead (0 references)
 
 Which actions? (all / none / pick by number, e.g. '1,3')
 ```
@@ -207,11 +205,10 @@ NeuralTree automatically detects the right mode based on your project's state:
 
 | Mode | When | What Happens |
 |------|------|-------------|
-| **bootstrap** | First run (no `.neuraltree/state.json`) | Full pipeline. Sandbox mandatory. |
-| **critical** | Flow Score < 0.60 | Full pipeline. Sandbox mandatory. |
-| **health-check** | Last run > 7 days ago | Re-benchmark everything, fix if degraded. |
-| **maintenance** | Score 0.60-0.90, run within 7 days | Targeted fixes for degraded areas only. |
-| **spot-check** | Score > 0.90, run within 7 days | Quick verification. 30 seconds. |
+| **full** | First run (no knowledge map) | Full pipeline: Explore → Map → Analyze → Plan → Execute → Verify. |
+| **refresh** | Knowledge map exists but stale (>7 days) | Full pipeline — re-explores to catch changes. |
+| **fix** | Map exists, recent, score < 0.60 | Analyze → Plan → Execute → Verify. Skip exploration. |
+| **check** | Map exists, recent, score >= 0.60 | Verify only — quick adaptive re-score. |
 
 ---
 
@@ -231,7 +228,7 @@ NeuralTree automatically detects the right mode based on your project's state:
 ### Run tests
 
 ```bash
-# Full test suite (345 tests)
+# Full test suite (384 tests)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Quick smoke test
@@ -268,7 +265,8 @@ neuraltree/
 │   │   ├── scoring/             score, diagnose, predict, update_calibration
 │   │   └── sandbox/             sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 │   └── skill/
-│       └── SKILL.md             2,500-line skill instruction file
+│       ├── SKILL.md             Skill router (v2, explore-first)
+│       └── sections/            7 phase files (explore, map, analyze, plan, execute, verify, report)
 ├── tests/
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (end-to-end via mcp.call_tool())
@@ -294,8 +292,9 @@ pip install -e ".[dev]"
 ### 2. Copy the skill
 
 ```bash
-mkdir -p ~/.claude/skills/neuraltree
+mkdir -p ~/.claude/skills/neuraltree/sections
 cp src/skill/SKILL.md ~/.claude/skills/neuraltree/SKILL.md
+cp src/skill/sections/*.md ~/.claude/skills/neuraltree/sections/
 ```
 
 ### 3. Register the MCP server

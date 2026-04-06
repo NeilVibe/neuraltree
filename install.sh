@@ -200,10 +200,10 @@ tools = asyncio.run(mcp.list_tools())
 print(len(tools))
 " 2>/dev/null || echo "0")
 
-if [[ "$TOOL_COUNT" -eq 24 ]]; then
-    ok "All 24 MCP tools loaded successfully"
+if [[ "$TOOL_COUNT" -eq 25 ]]; then
+    ok "All 25 MCP tools loaded successfully"
 else
-    warn "Expected 24 tools but got ${TOOL_COUNT}. The server may still work — check manually."
+    warn "Expected 25 tools but got ${TOOL_COUNT}. The server may still work — check manually."
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────

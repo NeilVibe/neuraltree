@@ -252,6 +252,180 @@ class TestKnowledgeMapPipeline:
         assert "error" in result
 
 
+class TestKnowledgeMapBuild:
+    """Test the build action — deterministic map construction from explorer reports."""
+
+    def _make_explorer_reports(self):
+        return [
+            {
+                "files": [
+                    {
+                        "path": "CLAUDE.md",
+                        "topic": "Project instructions",
+                        "key_concepts": ["architecture", "tools", "pipeline"],
+                        "references_to": ["README.md"],
+                        "size_lines": 100,
+                        "issues": [],
+                    },
+                    {
+                        "path": "README.md",
+                        "topic": "Public docs",
+                        "key_concepts": ["installation", "tools", "pipeline"],
+                        "references_to": ["CLAUDE.md", "LICENSE"],
+                        "size_lines": 200,
+                        "issues": ["LARGE_FILE: 200 lines"],
+                    },
+                ],
+            },
+            {
+                "files": [
+                    {
+                        "path": "LICENSE",
+                        "topic": "MIT License",
+                        "key_concepts": ["license"],
+                        "references_to": [],
+                        "size_lines": 21,
+                        "issues": [],
+                    },
+                    {
+                        "path": "docs/guide.md",
+                        "topic": "User guide",
+                        "key_concepts": ["installation", "setup", "quickstart"],
+                        "references_to": ["README.md"],
+                        "size_lines": 80,
+                        "issues": [],
+                    },
+                ],
+            },
+        ]
+
+    def test_build_returns_map_and_saves(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        assert "saved" in result
+        assert "knowledge_map" in result
+        assert "stats" in result
+        assert result["stats"]["total_files"] == 4
+
+    def test_build_creates_file_on_disk(self, tmp_project):
+        call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        km_path = tmp_project / ".neuraltree" / "knowledge_map.json"
+        assert km_path.exists()
+        loaded = json.loads(km_path.read_text())
+        assert loaded["version"] == 2
+        assert len(loaded["files"]) == 4
+
+    def test_build_computes_reference_edges(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        km = result["knowledge_map"]
+        ref_edges = [e for e in km["edges"] if e["type"] == "reference"]
+        pairs = {(e["source"], e["target"]) for e in ref_edges}
+        assert ("CLAUDE.md", "README.md") in pairs
+        assert ("README.md", "CLAUDE.md") in pairs
+        assert ("README.md", "LICENSE") in pairs
+        assert ("docs/guide.md", "README.md") in pairs
+
+    def test_build_computes_semantic_edges(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        km = result["knowledge_map"]
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        # CLAUDE.md and README.md share {"tools", "pipeline"} — jaccard > 0.3
+        assert len(sem_edges) >= 1
+        for e in sem_edges:
+            assert "shared_concepts" in e
+            assert e["weight"] > 0.3
+
+    def test_build_computes_clusters(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        km = result["knowledge_map"]
+        clusters = km["clusters"]
+        assert len(clusters) >= 1
+        # Every file in exactly one cluster
+        all_files = set()
+        for c in clusters:
+            for f in c["files"]:
+                assert f not in all_files
+                all_files.add(f)
+        assert all_files == set(km["files"].keys())
+
+    def test_build_detects_orphans(self, tmp_project):
+        # Put orphan in a separate dir so co-location doesn't connect it
+        reports = [{
+            "files": [
+                {"path": "docs/a.md", "key_concepts": ["x"], "references_to": ["docs/b.md"], "size_lines": 10, "issues": []},
+                {"path": "docs/b.md", "key_concepts": ["x"], "references_to": [], "size_lines": 10, "issues": []},
+                {"path": "isolated/orphan.md", "key_concepts": ["unique_z"], "references_to": [], "size_lines": 10, "issues": []},
+            ],
+        }]
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": reports,
+        })
+        km = result["knowledge_map"]
+        orphans = [i for i in km["issues"] if i["type"] == "orphan"]
+        orphan_files = {i["file"] for i in orphans}
+        assert "isolated/orphan.md" in orphan_files
+
+    def test_build_propagates_explorer_issues(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        km = result["knowledge_map"]
+        explorer_issues = [i for i in km["issues"] if i["type"] == "explorer_finding"]
+        assert len(explorer_issues) == 1
+        assert "LARGE_FILE" in explorer_issues[0]["description"]
+
+    def test_build_without_reports_errors(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+        })
+        assert "error" in result
+
+    def test_build_with_empty_reports(self, tmp_project):
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": [],
+        })
+        assert result["stats"]["total_files"] == 0
+
+    def test_build_loadable_after_save(self, tmp_project):
+        call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+        })
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "load",
+            "project_root": str(tmp_project),
+        })
+        assert "knowledge_map" in result
+        assert result["knowledge_map"]["stats"]["total_files"] == 4
+
+
 class TestAdaptiveScoreWithKnowledgeMap:
     """Score with adaptive=True should read the knowledge map."""
 
