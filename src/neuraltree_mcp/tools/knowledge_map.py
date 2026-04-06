@@ -181,28 +181,57 @@ def _build_map(
                         "weight": 0.5,
                     })
 
-    # Step 3: Greedy concept clustering
-    unclustered = set(files.keys())
-    clusters: list[dict] = []
+    # Step 3: Directory-first clustering with concept-based merging
+    # Primary signal: files in the same directory form a cluster.
+    # Then merge small clusters (≤2 files) into neighbors sharing 1+ concepts.
+    dir_clusters: dict[str, set[str]] = defaultdict(set)
+    for path in files:
+        dir_clusters[os.path.dirname(path) or "."].add(path)
 
-    while unclustered:
-        # Seed: file with most concepts (sorted for deterministic tie-breaking)
-        seed = max(sorted(unclustered), key=lambda p: len(files[p].get("key_concepts", [])))
-        cluster_files = {seed}
-        seed_concepts = set(files[seed].get("key_concepts", []))
+    # Convert to list of sets
+    cluster_sets: list[set[str]] = [s for s in dir_clusters.values()]
 
-        # Expand: add files sharing 2+ concepts with the growing cluster
-        for other in sorted(unclustered):
-            if other == seed:
+    # Merge small clusters (≤2 files) into larger ones sharing concepts
+    merged = True
+    while merged:
+        merged = False
+        new_sets: list[set[str]] = []
+        skip: set[int] = set()
+        for i, ci in enumerate(cluster_sets):
+            if i in skip:
                 continue
-            other_concepts = set(files[other].get("key_concepts", []))
-            if len(seed_concepts & other_concepts) >= 2:
-                cluster_files.add(other)
-                seed_concepts |= other_concepts
+            if len(ci) <= 2:
+                # Try to merge with the best-matching larger cluster
+                best_j = -1
+                best_overlap = 0
+                ci_concepts = set()
+                for f in ci:
+                    ci_concepts.update(files[f].get("key_concepts", []))
+                for j, cj in enumerate(cluster_sets):
+                    if j == i or j in skip:
+                        continue
+                    cj_concepts = set()
+                    for f in cj:
+                        cj_concepts.update(files[f].get("key_concepts", []))
+                    overlap = len(ci_concepts & cj_concepts)
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_j = j
+                if best_j >= 0 and best_overlap >= 1:
+                    cluster_sets[best_j] |= ci
+                    skip.add(i)
+                    merged = True
+                else:
+                    new_sets.append(ci)
+            else:
+                new_sets.append(ci)
+        cluster_sets = new_sets
 
-        # Name from top concepts
+    # Name clusters from top concepts
+    clusters: list[dict] = []
+    for component in cluster_sets:
         concept_counts: Counter = Counter()
-        for f in cluster_files:
+        for f in component:
             concept_counts.update(files[f].get("key_concepts", []))
         top_concepts = [c for c, _ in concept_counts.most_common(3)]
         cluster_name = "_".join(top_concepts[:2]) if top_concepts else "unnamed"
@@ -210,9 +239,8 @@ def _build_map(
         clusters.append({
             "name": cluster_name,
             "concept": ", ".join(top_concepts),
-            "files": sorted(cluster_files),
+            "files": sorted(component),
         })
-        unclustered -= cluster_files
 
     # Step 4: Graph-derived issues
     issues: list[dict] = []

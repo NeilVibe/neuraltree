@@ -452,8 +452,8 @@ class TestBuildMap:
         """Cluster spanning 3+ dirs should be flagged."""
         reports = [{
             "files": [
-                {"path": "a/f1.md", "key_concepts": ["shared1", "shared2", "x"], "references_to": [], "size_lines": 10},
-                {"path": "b/f2.md", "key_concepts": ["shared1", "shared2", "y"], "references_to": [], "size_lines": 10},
+                {"path": "a/f1.md", "key_concepts": ["shared1", "shared2", "x"], "references_to": ["b/f2.md"], "size_lines": 10},
+                {"path": "b/f2.md", "key_concepts": ["shared1", "shared2", "y"], "references_to": ["c/f3.md"], "size_lines": 10},
                 {"path": "c/f3.md", "key_concepts": ["shared1", "shared2", "z"], "references_to": [], "size_lines": 10},
             ],
         }]

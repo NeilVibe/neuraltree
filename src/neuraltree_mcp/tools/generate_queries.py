@@ -53,10 +53,18 @@ def _parse_headings(content: str) -> list[str]:
     Preserves technical punctuation (+, #, .) in terms like C++, C#, Node.js.
     """
     skip_headings = {
+        # Structural / meta
         "what is this", "current status", "architecture", "commands",
         "development protocol", "key principles", "table of contents",
         "dependencies", "project structure", "integration points",
         "specs & plans", "related", "docs", "overview", "contents",
+        # Common README procedural headings (not concepts)
+        "quick start", "getting started", "installation", "install",
+        "setup", "one-command install", "manual installation",
+        "first run", "usage", "example", "example output", "examples",
+        "prerequisites", "requirements", "contributing", "license",
+        "development", "run tests", "verify tools load", "testing",
+        "run mcp server directly", "how it works", "how to use",
     }
     topics = []
     for m in re.finditer(r'^#{2,3}\s+(.+)', content, re.MULTILINE):
@@ -89,6 +97,9 @@ def _parse_headings(content: str) -> list[str]:
             truncated = clean[:80].rsplit(" ", 1)[0]
             clean = truncated if len(truncated) >= 4 else clean[:80]
         if len(clean) < 4:
+            continue
+        # Skip numbered steps (e.g., "1. Install dependencies")
+        if re.match(r'^\d+\.?\s', clean):
             continue
         topics.append(clean)
     return topics

@@ -50,9 +50,6 @@ For EACH file, read it fully and report:
   "key_concepts": ["concept1", "concept2", ...],  // 3-8 concepts
   "references_to": ["other_file.md", ...],  // files this references
   "size_lines": 123,
-  "has_frontmatter": true/false,
-  "has_related_section": true/false,
-  "has_docs_section": true/false,
   "staleness": null or "description of outdated content",
   "issues": ["too large", "duplicate of X", "misplaced", ...]
 }
