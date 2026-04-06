@@ -56,6 +56,28 @@ def _parse_last_verified(content: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _compute_freshness(file_contents: dict[Path, str], md_files: list[Path], root: Path, window_days: int = 30) -> tuple[int, list[str]]:
+    """Compute freshness metric: % of files with last_verified within window."""
+    now = datetime.now(tz=timezone.utc)
+    fresh_count = 0
+    stale_files: list[str] = []
+    for md_file in md_files:
+        content = file_contents.get(md_file)
+        if content is None:
+            continue
+        date_str = _parse_last_verified(content)
+        if date_str:
+            try:
+                verified = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                if (now - verified).days <= window_days:
+                    fresh_count += 1
+                else:
+                    stale_files.append(os.path.relpath(md_file, root))
+            except ValueError:
+                stale_files.append(os.path.relpath(md_file, root))
+    return fresh_count, stale_files
+
+
 def _load_knowledge_map(root: Path) -> dict | None:
     """Load .neuraltree/knowledge_map.json if it exists.
 
@@ -255,26 +277,7 @@ def register(mcp: FastMCP) -> None:
         dead_neuron_ratio = 1.0 - (len(orphans) / max(len(all_contents), 1))
 
         # --- Freshness ---
-        now = datetime.now(tz=timezone.utc)
-        fresh_count = 0
-        stale_files = []
-
-        for md_file in md_files:
-            content = file_contents.get(md_file)
-            if content is None:
-                continue
-            date_str = _parse_last_verified(content)
-            if date_str:
-                try:
-                    verified = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                    if (now - verified).days <= FRESHNESS_WINDOW_DAYS:
-                        fresh_count += 1
-                    else:
-                        stale_files.append(os.path.relpath(md_file, root))
-                except ValueError:
-                    stale_files.append(os.path.relpath(md_file, root))
-            # Files without last_verified are not counted as fresh
-
+        fresh_count, stale_files = _compute_freshness(file_contents, md_files, root, FRESHNESS_WINDOW_DAYS)
         freshness = fresh_count / max(total_md, 1)
 
         # --- Trunk Pressure ---
@@ -298,22 +301,7 @@ def register(mcp: FastMCP) -> None:
                 # Override freshness window for adaptive freshness recomputation
                 adaptive_freshness_days = thresholds["freshness_days"]
                 if adaptive_freshness_days != FRESHNESS_WINDOW_DAYS:
-                    fresh_count = 0
-                    stale_files = []
-                    for md_file in md_files:
-                        content = file_contents.get(md_file)
-                        if content is None:
-                            continue
-                        date_str = _parse_last_verified(content)
-                        if date_str:
-                            try:
-                                verified = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                                if (now - verified).days <= adaptive_freshness_days:
-                                    fresh_count += 1
-                                else:
-                                    stale_files.append(os.path.relpath(md_file, root))
-                            except ValueError:
-                                stale_files.append(os.path.relpath(md_file, root))
+                    fresh_count, stale_files = _compute_freshness(file_contents, md_files, root, adaptive_freshness_days)
                     freshness = fresh_count / max(total_md, 1)
                 adaptive_context = {
                     "source": "knowledge_map",
