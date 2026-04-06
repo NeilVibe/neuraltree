@@ -8,7 +8,7 @@
 
 ## Current Status
 
-**COMPLETE.** 25 MCP tools (384 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 25 MCP tools (385 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
@@ -112,7 +112,7 @@ neuraltree/
 ## Commands
 
 ```bash
-# Run tests (345 passing)
+# Run tests (385 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Verify all 25 tools load

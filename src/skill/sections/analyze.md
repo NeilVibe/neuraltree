@@ -9,7 +9,7 @@
 
 ```
 km_result = neuraltree_knowledge_map(action="load", project_root=".")
-km = km_result["map"]
+km = km_result["knowledge_map"]
 ```
 
 ## Step 2: Claude Analyzes the Map
@@ -38,9 +38,46 @@ DO NOT use formulas or thresholds. Instead, THINK about:
 - Are there "dead zones" — areas of the project unreachable from navigation?
 - Would an agent new to this project know where to look?
 
-## Step 3: Produce Issue List
+## Step 3: Value Filter — Drop Busywork
 
-For each issue, write:
+Before producing issues, apply these filters. The goal is to propose
+changes that HELP someone find information faster — not to achieve
+metric compliance for its own sake.
+
+**DROP "unwired" if the file already has a working reference chain.**
+If files A→B→C→D already form an explicit chain via content references
+(e.g., pipeline phase files that reference the next phase), adding
+`## Related` sections is redundant. Only flag unwired files that are
+genuinely unreachable or disconnected from the graph.
+
+**DROP "missing frontmatter" for standard project files.**
+Files like CLAUDE.md, README.md, LICENSE, requirements.txt, pyproject.toml
+are standard project files governed by their own conventions. Do NOT
+propose adding neuraltree-specific frontmatter (name, last_verified, etc.)
+to files that aren't neuraltree-managed knowledge files. Only flag
+frontmatter issues on files that live in managed directories (memory/,
+lessons/, docs/) where freshness tracking adds value.
+
+**DROP any fix where you can't name the beneficiary.**
+Every proposed fix must answer: "Who would fail to find what information
+without this change?" If the answer is "nobody, but the metric would
+be higher" — drop it. Metric compliance is not a goal. Information
+flow is the goal.
+
+**DROP padding and expansion for its own sake.**
+An index file that correctly lists its 1 entry is fine. Don't propose
+expanding it to 20 lines for "completeness." A file that's short but
+complete is not a problem. Only flag files that are missing information
+someone would look for.
+
+**KEEP issues where information is genuinely lost, buried, or unreachable.**
+Misplaced knowledge (design decisions buried in operational logs),
+dead zones (directories with no path from trunk), broken references,
+stale content that misleads — these are real problems worth fixing.
+
+## Step 4: Produce Issue List
+
+For each issue that SURVIVES the value filter, write:
 
 ```
 {
@@ -62,7 +99,7 @@ For each issue, write:
 - **medium:** Information is findable but poorly organized
 - **low:** Cosmetic or minor improvement
 
-## Step 4: Merge with Map Issues
+## Step 5: Merge with Map Issues
 
 Combine Claude's analysis with issues already in the knowledge map.
 Deduplicate by file path. Claude's reasoning overrides mechanical detection.

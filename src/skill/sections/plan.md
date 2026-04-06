@@ -22,7 +22,24 @@ For each issue, generate a concrete action:
 | `dead_zone` | Add index file or wire into trunk |
 | `bloated_trunk` | Extract sections to branch files |
 
-## Step 2: Trace Before Destructive Actions
+## Step 2: Usefulness Gate
+
+Before tracing or presenting, review each action and ask:
+
+**"If I don't do this, what breaks?"**
+
+| Answer | Decision |
+|--------|----------|
+| Someone can't find critical information | KEEP — high value |
+| An agent would be misled by stale/broken content | KEEP — correctness |
+| Knowledge is buried where no one will look | KEEP — discoverability |
+| A metric improves but nothing practical changes | DROP — busywork |
+| The file gets "nicer" but no one was struggling | DROP — cosmetic |
+
+Drop any action that only serves metric compliance. The pipeline exists
+to improve information FLOW, not to achieve scores.
+
+## Step 3: Trace Before Destructive Actions
 
 For every move, delete, or split — call `neuraltree_trace()` first:
 
@@ -38,7 +55,7 @@ for action in actions:
             }
 ```
 
-## Step 3: Present to User
+## Step 4: Present to User
 
 Group actions by type. Show auto-fixable actions first, then approval-required:
 
@@ -60,7 +77,7 @@ APPROVAL REQUIRED:
      Approve? (y/n)
 ```
 
-## Step 4: Collect Approvals
+## Step 5: Collect Approvals
 
 ```
 approved_actions = []

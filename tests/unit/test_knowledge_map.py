@@ -2,7 +2,6 @@
 import json
 from pathlib import Path
 
-from neuraltree_mcp.text_utils import jaccard
 from neuraltree_mcp.tools.knowledge_map import _save_map, _load_map, _query_map, _build_map
 
 
@@ -161,26 +160,6 @@ class TestKnowledgeMapQuery:
         assert result["stats"]["total_files"] == 3
 
 
-# ─── _jaccard tests ──────────────────────────────────────────────────
-
-
-class TestJaccard:
-    def test_identical_sets(self):
-        assert jaccard({"a", "b"}, {"a", "b"}) == 1.0
-
-    def test_disjoint_sets(self):
-        assert jaccard({"a"}, {"b"}) == 0.0
-
-    def test_partial_overlap(self):
-        assert jaccard({"a", "b", "c"}, {"b", "c", "d"}) == 0.5
-
-    def test_empty_sets(self):
-        assert jaccard(set(), set()) == 0.0
-
-    def test_one_empty(self):
-        assert jaccard({"a"}, set()) == 0.0
-
-
 # ─── _build_map tests ────────────────────────────────────────────────
 
 
@@ -301,49 +280,112 @@ class TestBuildMap:
         for e in km["edges"]:
             assert e["source"] != e["target"]
 
-    def test_semantic_edges_computed(self, tmp_project):
+    def test_semantic_edges_from_viking(self, tmp_project):
+        """Semantic edges provided via semantic_edges param are included in the map."""
+        reports = _make_explorer_reports()
+        viking_edges = [
+            {"source": "README.md", "target": "docs/guide.md", "weight": 0.85, "reason": "Viking similarity"},
+        ]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 1
+        assert sem_edges[0]["source"] == "README.md"
+        assert sem_edges[0]["target"] == "docs/guide.md"
+        assert sem_edges[0]["weight"] == 0.85
+        assert sem_edges[0]["reason"] == "Viking similarity"
+
+    def test_semantic_edges_skip_unknown_files(self, tmp_project):
+        """Semantic edges referencing files not in explorer reports are dropped."""
+        reports = _make_explorer_reports()
+        viking_edges = [
+            {"source": "README.md", "target": "nonexistent.md", "weight": 0.9, "reason": "test"},
+        ]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 0
+
+    def test_semantic_edges_skip_self_reference(self, tmp_project):
+        """Semantic edges from a file to itself are dropped."""
+        reports = _make_explorer_reports()
+        viking_edges = [
+            {"source": "README.md", "target": "README.md", "weight": 1.0, "reason": "self"},
+        ]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 0
+
+    def test_semantic_edges_deduplicated_keeps_best_weight(self, tmp_project):
+        """Duplicate semantic edges (A→B and B→A) dedup to highest weight."""
+        reports = _make_explorer_reports()
+        viking_edges = [
+            {"source": "README.md", "target": "docs/guide.md", "weight": 0.75, "reason": "test"},
+            {"source": "docs/guide.md", "target": "README.md", "weight": 0.85, "reason": "better"},
+        ]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 1
+        assert sem_edges[0]["weight"] == 0.85  # best weight wins
+
+    def test_no_semantic_edges_without_param(self, tmp_project):
+        """Without semantic_edges param, no semantic edges are created."""
         reports = _make_explorer_reports()
         km = _build_map(reports, str(tmp_project))
         sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
-        # README.md and docs/guide.md share {"setup", "installation"} (2 concepts)
-        # Jaccard: {setup,installation,overview} & {setup,installation,quickstart}
-        # overlap=2, union=4, jaccard=0.5 > 0.3
-        pairs = {(e["source"], e["target"]) for e in sem_edges}
-        assert any(
-            ("README.md" in pair and "docs/guide.md" in pair)
-            for pair in pairs
-        )
+        assert len(sem_edges) == 0
 
-    def test_semantic_edges_have_shared_concepts(self, tmp_project):
+    def test_no_semantic_edges_with_empty_list(self, tmp_project):
+        """Empty list produces same result as None."""
         reports = _make_explorer_reports()
-        km = _build_map(reports, str(tmp_project))
+        km = _build_map(reports, str(tmp_project), semantic_edges=[])
         sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
-        for e in sem_edges:
-            assert "shared_concepts" in e
-            assert len(e["shared_concepts"]) >= 2
+        assert len(sem_edges) == 0
 
-    def test_semantic_edges_skip_low_jaccard(self, tmp_project):
-        """Files with only 2 shared concepts out of 20 total should not get an edge."""
+    def test_semantic_edges_malformed_non_dict_skipped(self, tmp_project):
+        """Non-dict entries in semantic_edges are skipped with a warning."""
+        reports = _make_explorer_reports()
+        viking_edges = ["not_a_dict", 42, None]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 0
+        assert len(km["warnings"]) == 3
+
+    def test_semantic_edges_non_numeric_weight_skipped(self, tmp_project):
+        """Non-numeric weight is skipped with a warning, not a crash."""
+        reports = _make_explorer_reports()
+        viking_edges = [
+            {"source": "README.md", "target": "docs/guide.md", "weight": "high", "reason": "bad"},
+        ]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 0
+        assert any("not a number" in w for w in km["warnings"])
+
+    def test_colocation_suppressed_by_semantic_edge(self, tmp_project):
+        """Semantic edge between co-located files suppresses co-location edge."""
         reports = [{
             "files": [
-                {
-                    "path": "a.md",
-                    "key_concepts": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "shared1", "shared2"],
-                    "references_to": [],
-                    "size_lines": 10,
-                },
-                {
-                    "path": "b.md",
-                    "key_concepts": ["x", "y", "z", "w", "v", "u", "t", "s", "r", "shared1", "shared2"],
-                    "references_to": [],
-                    "size_lines": 10,
-                },
+                {"path": "docs/a.md", "key_concepts": ["x"], "references_to": [], "size_lines": 10},
+                {"path": "docs/b.md", "key_concepts": ["y"], "references_to": [], "size_lines": 10},
+            ],
+        }]
+        viking_edges = [
+            {"source": "docs/a.md", "target": "docs/b.md", "weight": 0.9, "reason": "test"},
+        ]
+        km = _build_map(reports, str(tmp_project), semantic_edges=viking_edges)
+        coloc = [e for e in km["edges"] if e["type"] == "co-located"]
+        assert len(coloc) == 0  # semantic edge suppresses co-location
+        sem = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem) == 1
+
+    def test_ensure_list_handles_tuples(self, tmp_project):
+        """Tuple key_concepts should be converted to list, not dropped."""
+        reports = [{
+            "files": [
+                {"path": "a.md", "key_concepts": ("setup", "install"), "references_to": [], "size_lines": 10},
             ],
         }]
         km = _build_map(reports, str(tmp_project))
-        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
-        # overlap=2, union=20, jaccard=0.1 < 0.3 → no edge
-        assert len(sem_edges) == 0
+        assert set(km["files"]["a.md"]["key_concepts"]) == {"setup", "install"}
 
     def test_colocation_edges_created_when_no_other_edge(self, tmp_project):
         """Two files in same dir with no ref/semantic edges get a co-location edge."""
@@ -462,35 +504,6 @@ class TestBuildMap:
         assert len(edge_keys) == len(set(edge_keys))
 
     # ── Review round 1 fixes: boundary & edge-case tests ──────────────
-
-    def test_jaccard_exactly_0_3_produces_no_edge(self, tmp_project):
-        """Jaccard exactly 0.3 should NOT create a semantic edge (strict > 0.3)."""
-        # overlap=3, union=10, jaccard=0.3 exactly
-        reports = [{
-            "files": [
-                {"path": "a.md", "key_concepts": ["a", "b", "c", "d", "e", "f", "g"],
-                 "references_to": [], "size_lines": 10},
-                {"path": "b.md", "key_concepts": ["a", "b", "c", "h", "i", "j"],
-                 "references_to": [], "size_lines": 10},
-            ],
-        }]
-        km = _build_map(reports, str(tmp_project))
-        sem = [e for e in km["edges"] if e["type"] == "semantic"]
-        assert len(sem) == 0
-
-    def test_overlap_1_high_jaccard_produces_no_edge(self, tmp_project):
-        """1 shared concept should NOT create a semantic edge even if Jaccard > 0.3."""
-        reports = [{
-            "files": [
-                {"path": "a.md", "key_concepts": ["shared", "x"],
-                 "references_to": [], "size_lines": 10},
-                {"path": "b.md", "key_concepts": ["shared", "y"],
-                 "references_to": [], "size_lines": 10},
-            ],
-        }]
-        km = _build_map(reports, str(tmp_project))
-        sem = [e for e in km["edges"] if e["type"] == "semantic"]
-        assert len(sem) == 0
 
     def test_clustering_deterministic_with_ties(self, tmp_project):
         """Files with equal concept counts should produce the same clusters every time."""

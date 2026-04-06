@@ -336,7 +336,25 @@ class TestKnowledgeMapBuild:
         assert ("README.md", "LICENSE") in pairs
         assert ("docs/guide.md", "README.md") in pairs
 
-    def test_build_computes_semantic_edges(self, tmp_project):
+    def test_build_accepts_viking_semantic_edges(self, tmp_project):
+        viking_edges = [
+            {"source": "CLAUDE.md", "target": "README.md", "weight": 0.9, "reason": "Viking similarity"},
+        ]
+        result = call_tool("neuraltree_knowledge_map", {
+            "action": "build",
+            "project_root": str(tmp_project),
+            "explorer_reports": self._make_explorer_reports(),
+            "semantic_edges": viking_edges,
+        })
+        km = result["knowledge_map"]
+        sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
+        assert len(sem_edges) == 1
+        assert sem_edges[0]["source"] == "CLAUDE.md"
+        assert sem_edges[0]["target"] == "README.md"
+        assert sem_edges[0]["weight"] == 0.9
+        assert sem_edges[0]["reason"] == "Viking similarity"
+
+    def test_build_no_semantic_edges_without_param(self, tmp_project):
         result = call_tool("neuraltree_knowledge_map", {
             "action": "build",
             "project_root": str(tmp_project),
@@ -344,11 +362,7 @@ class TestKnowledgeMapBuild:
         })
         km = result["knowledge_map"]
         sem_edges = [e for e in km["edges"] if e["type"] == "semantic"]
-        # CLAUDE.md and README.md share {"tools", "pipeline"} — jaccard > 0.3
-        assert len(sem_edges) >= 1
-        for e in sem_edges:
-            assert "shared_concepts" in e
-            assert e["weight"] > 0.3
+        assert len(sem_edges) == 0
 
     def test_build_computes_clusters(self, tmp_project):
         result = call_tool("neuraltree_knowledge_map", {

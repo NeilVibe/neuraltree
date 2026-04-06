@@ -11,7 +11,6 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from neuraltree_mcp.text_utils import jaccard
 from neuraltree_mcp.validation import validate_project_root
 
 
@@ -42,21 +41,27 @@ def _validate_map_paths(knowledge_map: dict) -> str | None:
 
 
 def _ensure_list(value: Any, field_name: str) -> list:
-    """Coerce a value to a list. Strings are wrapped, non-iterables become empty list."""
+    """Coerce a value to a list. Strings are wrapped, tuples/sets converted, others become empty."""
     if isinstance(value, list):
         return value
     if isinstance(value, str):
         return [value]
+    if isinstance(value, (tuple, set, frozenset)):
+        return list(value)
     return []
 
 
-def _build_map(explorer_reports: list[dict], project_root: str) -> dict:
+def _build_map(
+    explorer_reports: list[dict],
+    project_root: str,
+    semantic_edges: list[dict] | None = None,
+) -> dict:
     """Build a complete knowledge map from explorer reports.
 
     Deterministically computes:
     - Merged file inventory from all explorer reports
     - Reference edges (explicit references between known files)
-    - Semantic edges (Jaccard similarity on key_concepts, threshold > 0.3, overlap >= 2)
+    - Semantic edges (provided by caller via Viking/Model2Vec, or empty)
     - Co-location edges (same directory, only if no stronger edge exists)
     - Greedy concept clusters (seed by most concepts, expand by 2+ shared)
     - Graph-derived issues (orphans, scattered clusters)
@@ -67,6 +72,10 @@ def _build_map(explorer_reports: list[dict], project_root: str) -> dict:
                           "directories", and optionally "observations" keys.
                           Each file entry must have at least "path".
         project_root: Project root directory (for project_name).
+        semantic_edges: Optional list of pre-computed semantic edges from
+                        Viking/Model2Vec. Each edge: {"source": str, "target": str,
+                        "weight": float, "reason": str}. When provided, these
+                        replace internal similarity computation.
 
     Returns:
         Complete knowledge map dict ready for _save_map().
@@ -119,32 +128,33 @@ def _build_map(explorer_reports: list[dict], project_root: str) -> dict:
                     })
                     ref_set.add(pair)
 
-    # Step 2B: Semantic edges (pairwise Jaccard on key_concepts)
-    # Semantic edges coexist with reference edges — different information.
-    sem_set: set[tuple[str, str]] = set()
-    file_paths = sorted(files.keys())
-    for i, path_a in enumerate(file_paths):
-        concepts_a = set(files[path_a].get("key_concepts", []))
-        if not concepts_a:
-            continue
-        for path_b in file_paths[i + 1:]:
-            concepts_b = set(files[path_b].get("key_concepts", []))
-            if not concepts_b:
+    # Step 2B: Semantic edges (provided by caller via Viking/Model2Vec)
+    # The skill queries Viking for semantic neighbors and passes them here.
+    # Only edges between known files are included. Best weight wins on dedup.
+    if semantic_edges:
+        sem_best: dict[tuple[str, str], dict] = {}
+        for se in semantic_edges:
+            if not isinstance(se, dict):
+                warnings.append(f"Skipped non-dict semantic edge: {type(se).__name__}")
                 continue
-            overlap = concepts_a & concepts_b
-            if len(overlap) >= 2:
-                score = jaccard(concepts_a, concepts_b)
-                if score > 0.3:
-                    pair_ab = (path_a, path_b)
-                    if pair_ab not in sem_set:
-                        edges.append({
-                            "source": path_a,
-                            "target": path_b,
-                            "type": "semantic",
-                            "weight": round(score, 3),
-                            "shared_concepts": sorted(overlap),
-                        })
-                        sem_set.add(pair_ab)
+            src = se.get("source", "")
+            tgt = se.get("target", "")
+            if src in files and tgt in files and src != tgt:
+                weight = se.get("weight", 0.8)
+                if not isinstance(weight, (int, float)):
+                    warnings.append(f"Skipped semantic edge {src}->{tgt}: weight is not a number")
+                    continue
+                pair = tuple(sorted((src, tgt)))
+                edge_data = {
+                    "source": src,
+                    "target": tgt,
+                    "type": "semantic",
+                    "weight": round(weight, 3),
+                    "reason": se.get("reason", "Viking similarity"),
+                }
+                if pair not in sem_best or weight > sem_best[pair]["weight"]:
+                    sem_best[pair] = edge_data
+        edges.extend(sem_best.values())
 
     # Step 2C: Co-location edges (same directory, only if no stronger edge exists)
     # "Stronger" means any reference or semantic edge between the pair.
@@ -396,6 +406,7 @@ def register(mcp: FastMCP) -> None:
         project_root: str = ".",
         knowledge_map: dict | None = None,
         explorer_reports: list[dict] | None = None,
+        semantic_edges: list[dict] | None = None,
         file_path: str | None = None,
         cluster: str | None = None,
         neighbors_of: str | None = None,
@@ -405,7 +416,7 @@ def register(mcp: FastMCP) -> None:
 
         Actions:
           - build: Deterministically compute a knowledge map from explorer reports.
-                   Computes edges (reference + semantic Jaccard + co-location),
+                   Computes edges (reference + Viking semantic + co-location),
                    greedy concept clusters, orphan detection, and stats.
                    Saves the result automatically.
           - save: Persist a knowledge map to .neuraltree/knowledge_map.json
@@ -420,6 +431,9 @@ def register(mcp: FastMCP) -> None:
             project_root: Project root directory.
             knowledge_map: The map dict to save (required for 'save' action).
             explorer_reports: List of explorer report dicts (required for 'build' action).
+            semantic_edges: Pre-computed semantic edges from Viking/Model2Vec
+                           (optional for 'build' action). Each: {"source", "target",
+                           "weight", "reason"}.
             file_path: Query filter — return data for a specific file.
             cluster: Query filter — return data for a specific cluster by name.
             neighbors_of: Query filter — return all connected files (both directions).
@@ -438,8 +452,10 @@ def register(mcp: FastMCP) -> None:
                 return {"error": "explorer_reports is required for build action"}
             if not isinstance(explorer_reports, list):
                 return {"error": "explorer_reports must be a list of report dicts"}
+            if semantic_edges is not None and not isinstance(semantic_edges, list):
+                return {"error": "semantic_edges must be a list of edge dicts or None"}
             try:
-                km = _build_map(explorer_reports, project_root)
+                km = _build_map(explorer_reports, project_root, semantic_edges=semantic_edges)
                 path = _save_map(km, project_root)
                 return {
                     "saved": str(path),
@@ -450,7 +466,7 @@ def register(mcp: FastMCP) -> None:
             except (OSError, ValueError) as e:
                 return {"error": f"Failed to build map: {e}"}
             except (TypeError, KeyError, AttributeError) as e:
-                return {"error": f"Malformed explorer report: {type(e).__name__}: {e}"}
+                return {"error": f"Failed to build map: {type(e).__name__}: {e}"}
 
         elif action == "save":
             if knowledge_map is None:
