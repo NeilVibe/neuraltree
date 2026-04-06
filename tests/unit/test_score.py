@@ -1,4 +1,7 @@
 """Tests for neuraltree_score tool."""
+import asyncio
+import json
+
 from neuraltree_mcp.scoring.score import (
     _find_md_files,
     _has_section,
@@ -6,6 +9,19 @@ from neuraltree_mcp.scoring.score import (
     _parse_last_verified,
     WEIGHTS,
 )
+from neuraltree_mcp.server import mcp
+
+
+def call_tool(name: str, args: dict) -> dict:
+    """Helper to call an MCP tool synchronously and parse the result."""
+    result = asyncio.run(mcp.call_tool(name, args))
+    if hasattr(result, "structured_content") and result.structured_content is not None:
+        return result.structured_content
+    if hasattr(result, "content"):
+        for block in result.content:
+            if hasattr(block, "text"):
+                return json.loads(block.text)
+    return result
 
 
 class TestHasSection:
@@ -109,3 +125,87 @@ class TestScoreIntegration:
 
         # coding.md has 2026-04-04 (fresh), testing.md has 2026-03-01 (borderline)
         assert fresh >= 1
+
+
+class TestAdaptiveScoring:
+    """Tests for adaptive=True scoring mode."""
+
+    def test_adaptive_without_map_falls_back_to_static(self, tmp_project):
+        """When adaptive=True but no knowledge_map.json exists, uses static thresholds."""
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project),
+            "adaptive": True,
+        })
+
+        assert "error" not in result
+        assert "adaptive_context" in result
+        assert result["adaptive_context"]["source"] == "static"
+        assert result["adaptive_context"]["reason"] == "no knowledge_map"
+        # Metrics should still be present and valid
+        for key in ("hop_efficiency", "synapse_coverage", "dead_neuron_ratio", "freshness", "trunk_pressure"):
+            assert isinstance(result["metrics"][key], (int, float))
+
+    def test_adaptive_with_map_uses_project_stats(self, tmp_project):
+        """When knowledge_map.json exists, adaptive_context.source == 'knowledge_map'."""
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir()
+        km = {
+            "stats": {
+                "total_files": 50,
+                "avg_file_size": 150,
+                "max_depth": 3,
+            }
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project),
+            "adaptive": True,
+        })
+
+        assert "error" not in result
+        assert "adaptive_context" in result
+        ctx = result["adaptive_context"]
+        assert ctx["source"] == "knowledge_map"
+        assert "thresholds" in ctx
+        assert ctx["thresholds"]["trunk_cap"] == 100  # 50 files < 100 threshold
+        assert ctx["thresholds"]["file_size_cap"] == 300  # 2 * 150
+        assert ctx["thresholds"]["freshness_days"] == 40  # base 30 + 10*(3-2)
+
+    def test_adaptive_trunk_pressure_scales_with_project_size(self, tmp_project):
+        """A 500-file project should have trunk_cap > 100."""
+        nt_dir = tmp_project / ".neuraltree"
+        nt_dir.mkdir()
+        km = {
+            "stats": {
+                "total_files": 500,
+                "avg_file_size": 200,
+                "max_depth": 4,
+            }
+        }
+        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
+
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project),
+            "adaptive": True,
+        })
+
+        ctx = result["adaptive_context"]
+        assert ctx["source"] == "knowledge_map"
+        # 500 files: 100 + 25 * (500 // 100) = 100 + 125 = 225
+        assert ctx["thresholds"]["trunk_cap"] == 225
+        assert ctx["thresholds"]["trunk_cap"] > 100
+        # With trunk_cap=225, small trunk lines (~5) should get 1.0 pressure
+        assert result["metrics"]["trunk_pressure"] == 1.0
+
+    def test_default_mode_unchanged(self, tmp_project):
+        """Calling without adaptive=True returns same result as before — no adaptive_context."""
+        result = call_tool("neuraltree_score", {
+            "project_root": str(tmp_project),
+        })
+
+        assert "error" not in result
+        assert "adaptive_context" not in result
+        assert "metrics" in result
+        assert "flow_score_partial" in result
+        assert result["metrics"]["precision_at_3"] is None
