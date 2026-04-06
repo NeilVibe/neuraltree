@@ -35,19 +35,26 @@ def _check_viking(viking_url: str) -> bool:
         return False
 
 
-def _viking_search(viking_url: str, query: str, limit: int) -> list[dict]:
-    """Search Viking and return list of {uri, score, abstract}."""
+def _viking_search(
+    viking_url: str, query: str, limit: int, project_name: str | None = None
+) -> list[dict]:
+    """Search Viking and return list of {uri, score, abstract}.
+
+    If project_name is set, over-fetches and filters to URIs containing
+    the project name to avoid cross-project bleed.
+    """
+    fetch_limit = limit * 3 if project_name else limit
     try:
         r = requests.post(
             f"{viking_url}/api/v1/search/search",
-            json={"query": query, "limit": limit},
+            json={"query": query, "limit": fetch_limit},
             timeout=_READ_TIMEOUT,
         )
         if r.status_code != 200:
             return []
         data = r.json()
         resources = data.get("result", {}).get("resources", [])
-        return [
+        results = [
             {
                 "uri": res.get("uri", ""),
                 "score": res.get("score", 0.0),
@@ -55,6 +62,10 @@ def _viking_search(viking_url: str, query: str, limit: int) -> list[dict]:
             }
             for res in resources
         ]
+        if project_name:
+            prefix = f"viking://resources/{project_name}/"
+            results = [r for r in results if r["uri"].startswith(prefix)]
+        return results[:limit]
     except (requests.ConnectionError, requests.Timeout, ValueError, OSError):
         return []
 
@@ -143,6 +154,9 @@ def register(mcp: FastMCP) -> None:
                 "warnings": [f"limit must be >= 1, got {limit}"],
             }
 
+        # Derive project name for URI filtering (avoids cross-project bleed)
+        project_name = Path(os.path.abspath(project_root)).name or None
+
         query_results = []
         warnings: list[str] = []
 
@@ -155,8 +169,8 @@ def register(mcp: FastMCP) -> None:
                 warnings.append(f"Skipping query with no text: {q}")
                 continue
 
-            # Search Viking
-            results = _viking_search(viking_url, query_text, limit)
+            # Search Viking (filtered to this project)
+            results = _viking_search(viking_url, query_text, limit, project_name)
 
             judgments = []
             for res in results[:limit]:

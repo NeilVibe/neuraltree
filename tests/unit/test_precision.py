@@ -82,6 +82,53 @@ class TestVikingSearch:
             results = _viking_search("http://localhost:1933", "test", 3)
             assert results == []
 
+    def test_filters_by_project_name(self):
+        """With project_name, only URIs matching that project are returned."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    {"uri": "viking://resources/neuraltree/a.md", "score": 0.9, "abstract": ""},
+                    {"uri": "viking://resources/newfin/b.md", "score": 0.85, "abstract": ""},
+                    {"uri": "viking://resources/neuraltree/c.md", "score": 0.8, "abstract": ""},
+                    {"uri": "viking://resources/memory/d.md", "score": 0.7, "abstract": ""},
+                    {"uri": "viking://resources/neuraltree/e.md", "score": 0.6, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name="neuraltree")
+            assert len(results) == 3
+            assert all("neuraltree" in r["uri"] for r in results)
+            assert results[0]["uri"] == "viking://resources/neuraltree/a.md"
+
+    def test_no_filter_without_project_name(self):
+        """Without project_name, all results pass through."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {
+            "result": {
+                "resources": [
+                    {"uri": "viking://resources/newfin/a.md", "score": 0.9, "abstract": ""},
+                    {"uri": "viking://resources/neuraltree/b.md", "score": 0.8, "abstract": ""},
+                ]
+            }
+        }
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            results = _viking_search("http://localhost:1933", "test", 3, project_name=None)
+            assert len(results) == 2
+
+    def test_over_fetches_when_filtering(self):
+        """Should request limit*3 from Viking when project_name is set."""
+        mock_response = MagicMock(status_code=200)
+        mock_response.json.return_value = {"result": {"resources": []}}
+        with patch("neuraltree_mcp.tools.precision.requests") as mock_req:
+            mock_req.post.return_value = mock_response
+            _viking_search("http://localhost:1933", "test", 3, project_name="myproject")
+            call_args = mock_req.post.call_args
+            assert call_args[1]["json"]["limit"] == 9  # 3 * 3
+
 
 class TestVikingRead:
     def test_reads_content(self):
