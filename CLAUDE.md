@@ -55,7 +55,8 @@ neuraltree/
 │   │   ├── server.py            Entry point — registers all 24 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
-│   │   ├── tools/               8 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize, wiki_lint)
+│   │   ├── tools/               8 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize/, wiki_lint)
+│   │   │   └── reorganize/      Package: 6 tool files + _helpers.py (was 809-line monolith)
 │   │   ├── scoring/             2 modules (score, diagnose)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
