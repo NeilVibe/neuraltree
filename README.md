@@ -17,7 +17,7 @@ NeuralTree transforms any project into a structured information system where any
 ├──────────────┬──────────────┬──────────────┬────────────┤
 │ neuraltree   │ Viking MCP   │ Agent Swarm  │ Claude     │
 │ THE MUSCLE   │ THE MEMORY   │ THE EYES     │ THE JUDGE  │
-│ 25 tools     │ Semantic     │ 2-10 parallel│ Reasoning  │
+│ 24 tools     │ Semantic     │ 2-10 parallel│ Reasoning  │
 │ scan, score, │ search all   │ explorers    │ analysis   │
 │ wire, map,   │ indexed      │ read project │ (no hard-  │
 │ sandbox...   │ content      │ deeply       │ coded math)│
@@ -66,9 +66,9 @@ That's it. NeuralTree detects it's a first run (full mode), launches parallel ex
 
 ---
 
-## MCP Tools (25)
+## MCP Tools (24)
 
-NeuralTree's MCP server provides 25 tools across 8 categories:
+NeuralTree's MCP server provides 24 tools across 8 categories:
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -88,8 +88,6 @@ NeuralTree's MCP server provides 25 tools across 8 categories:
 | | `neuraltree_lesson_add` | Record a new lesson from an autoloop decision |
 | **Scoring** | `neuraltree_score` | Compute structural metrics (5 of 6 — precision needs Viking) |
 | | `neuraltree_diagnose` | Classify retrieval failures by gap type |
-| | `neuraltree_predict` | Virtual backtest — simulate changes before applying |
-| | `neuraltree_update_calibration` | Update prediction model accuracy from real outcomes |
 | **Semantic** | `neuraltree_precision` | Search Viking + retrieve content — Claude judges relevance externally |
 | | `neuraltree_viking_index` | Batch-index local files into Viking semantic search |
 | **Knowledge Map** | `neuraltree_knowledge_map` | Generate a structured map of project knowledge topology |
@@ -126,12 +124,12 @@ The Flow Score is a single number (0.0-1.0) that tells you whether information i
 | Command | Pipeline | Description |
 |---------|----------|-------------|
 | `/neuraltree` | Auto-detected | Detects mode from project state and runs the appropriate pipeline. |
-| `/neuraltree explore` | Explore + Map | Deep parallel exploration and knowledge map generation only. |
+| `/neuraltree understand` | Understand | Deep parallel exploration and knowledge map generation only. |
 | `/neuraltree analyze` | Analyze only | Uses existing knowledge map to identify issues. |
 | `/neuraltree fix` | Analyze → Plan → Execute → Verify | Jump straight to fixing — requires existing knowledge map. |
-| `/neuraltree verify` | Verify only | Quick re-score with adaptive thresholds. |
+| `/neuraltree verify` | Verify only | Quick re-score with wiki lint + adaptive thresholds. |
 | `/neuraltree map` | Show map | Display knowledge map summary (concept clusters, file graph). |
-| `/neuraltree auto` | Full pipeline | Explore → Map → Analyze → Plan → Execute → Verify. Always runs everything. |
+| `/neuraltree auto` | Full pipeline | Understand → Analyze → Plan → Execute → Verify. Always runs everything. |
 
 ---
 
@@ -141,12 +139,11 @@ The Flow Score is a single number (0.0-1.0) that tells you whether information i
 
 ```
 1. ACTIVATE    Verify tools, detect mode, acquire lock, scale agent count to project size
-2. EXPLORE     Launch 2-10 parallel explorer agents — each reads a directory slice deeply
-3. MAP         Synthesize explorer reports into dual-layer knowledge map (file graph + concept clusters)
-4. ANALYZE     Claude reads the map and REASONS about what's wrong — no hardcoded formulas
-5. PLAN        Propose concrete reorganization actions — user approves per-item
-6. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
-7. VERIFY      Adaptive scoring confirms improvement — thresholds derived from project shape
+2. UNDERSTAND  Launch 2-10 parallel explorer agents, synthesize into dual-layer knowledge map
+3. ANALYZE     Check past lessons, Claude reads the map and REASONS about what's wrong
+4. PLAN        Propose concrete reorganization actions — user approves per-item
+5. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
+6. VERIFY      Wiki lint + adaptive scoring confirms improvement — thresholds derived from project shape
 ```
 
 ### Explore-First vs Metric-First
@@ -204,8 +201,8 @@ NeuralTree automatically detects the right mode based on your project's state:
 
 | Mode | When | What Happens |
 |------|------|-------------|
-| **full** | First run (no knowledge map) | Full pipeline: Explore → Map → Analyze → Plan → Execute → Verify. |
-| **refresh** | Knowledge map exists but stale (>7 days) | Full pipeline — re-explores to catch changes. |
+| **full** | First run (no knowledge map) | Full pipeline: Understand → Analyze → Plan → Execute → Verify. |
+| **refresh** | Knowledge map exists but stale (>7 days) | Full pipeline — re-understands to catch changes. |
 | **fix** | Map exists, recent, score < 0.60 | Analyze → Plan → Execute → Verify. Skip exploration. |
 | **check** | Map exists, recent, score >= 0.60 | Verify only — quick adaptive re-score. |
 
@@ -257,15 +254,15 @@ PYTHONPATH=src python3.11 -m neuraltree_mcp.server
 neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
-│   │   ├── server.py            Entry point — registers all 25 tools
+│   │   ├── server.py            Entry point — registers all 24 tools
 │   │   ├── validation.py        Path traversal prevention
 │   │   ├── text_utils.py        Shared utilities
 │   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson, reorganize, knowledge_map, precision, viking_index
-│   │   ├── scoring/             score, diagnose, predict, update_calibration
+│   │   ├── scoring/             score, diagnose
 │   │   └── sandbox/             sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 │   └── skill/
 │       ├── SKILL.md             Skill router (v2, explore-first)
-│       └── sections/            7 phase files (explore, map, analyze, plan, execute, verify, report)
+│       └── sections/            6 phase files (understand, analyze, plan, execute, verify, report)
 ├── tests/
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (end-to-end via mcp.call_tool())

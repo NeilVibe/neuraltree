@@ -1,40 +1,38 @@
----
-project: neuraltree
-type: concept
----
-
 # Autoloop
 
-**Autonomous improvement loop with KEEP/HOLD/DISCARD decisions.**
+**Autonomous improvement via `/autoresearch` with flow_score sub-metrics.**
 
-The Autoloop is NeuralTree's mode for autonomous project reorganization. It runs the [Explore-First Pipeline](explore-first-pipeline.md) repeatedly, making improvements and deciding whether to keep them.
+NeuralTree's autoloop mode delegates autonomous iteration to the
+`/autoresearch` skill (Karpathy-inspired). Instead of a custom loop
+with custom prediction and lesson recording, autoloop uses:
 
-## How It Works
+- **Metric:** Individual flow_score sub-metric (the lowest one)
+- **Scope:** Project docs/markdown files
+- **Verify:** `neuraltree_score` → parse targeted sub-metric
+- **Each iteration:** One pipeline fix (wire/move/split/shrink)
+- **Keep/Discard:** Autoresearch handles via git commit/revert
+- **Learning:** `neuraltree_lesson_add` records failures in Verify phase
 
-1. Run the full pipeline (Explore → Map → Analyze → Plan → Execute → Verify)
-2. Compare before/after [Flow Score](flow-score.md)
-3. Decision:
-   - **KEEP:** Score improved, changes are good → apply to real project
-   - **HOLD:** Score unchanged, needs more iteration → keep in [sandbox](sandbox-first.md)
-   - **DISCARD:** Score decreased or changes are harmful → destroy sandbox
+## Usage
 
-## Key Constraints
+```
+/neuraltree auto
+```
 
-- All changes happen in sandbox ([Sandbox First](sandbox-first.md))
-- [User Approves Destructive Actions](user-approves-destructive.md) — KEEP requires user confirmation
-- Lessons from each loop iteration are recorded via `neuraltree_lesson_add`
-- Maximum iterations are bounded to prevent infinite loops
+This routes to `/autoresearch` with the neuraltree pipeline as the
+modification engine and the lowest flow_score sub-metric as the target.
 
-## Lessons Learned
+## Why Autoresearch > Custom Loop
 
-First live run findings are documented in `lessons/autoloop.md`:
-- Scoring has limits (some improvements aren't captured by metrics)
-- Performance bottlenecks in large projects (many Viking calls)
-- Value filtering prevents busywork recommendations
+| Custom autoloop (never shipped) | /autoresearch (proven) |
+|--------------------------------|----------------------|
+| Custom predict tool | Sandbox + real measurement |
+| Custom calibration | Git-based keep/discard |
+| Custom lesson recording | lesson_add in verify phase |
+| Had to be built and maintained | Already exists and works |
 
 ## Related
 
-- [Explore First Pipeline](explore-first-pipeline.md) — autoloop runs this pipeline
-- [Sandbox First](sandbox-first.md) — all changes in sandbox
-- [User Approves Destructive Actions](user-approves-destructive.md) — user confirms KEEP
-- [Flow Score](flow-score.md) — decides KEEP/HOLD/DISCARD
+- [Flow Score](flow-score.md) — the metric autoresearch targets
+- [Sandbox First](sandbox-first.md) — changes always in sandbox
+- [Algorithm in Tool, Judgment in Claude](algorithm-tool-judgment-claude.md)

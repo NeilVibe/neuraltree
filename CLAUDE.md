@@ -8,13 +8,13 @@
 
 ## Current Status
 
-**COMPLETE.** 26 MCP tools (426 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 24 MCP tools (426 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
 Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — explore-first orchestration
-MCP Server (neuraltree-mcp) = THE MUSCLE — 26 tools, 426 tests
+MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 426 tests
 Viking MCP = THE MEMORY — semantic search
 Agent Swarm = THE EYES — 2-10 parallel explorers
 Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
@@ -23,15 +23,14 @@ Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
 ## Pipeline (v2)
 
 ```
-Phase 1: EXPLORE  — N agents read project deeply in parallel
-Phase 2: MAP      — synthesize into dual-layer knowledge map
-Phase 3: ANALYZE  — Claude reasons about what's wrong  
-Phase 4: PLAN     — propose reorganization, user approves
-Phase 5: EXECUTE  — apply in sandbox
-Phase 6: VERIFY   — universal organization scoring confirms improvement
+Phase 1: UNDERSTAND — N agents read project deeply in parallel, synthesize knowledge map
+Phase 2: ANALYZE   — Check lessons, Claude reasons about what's wrong
+Phase 3: PLAN      — propose reorganization, user approves
+Phase 4: EXECUTE   — apply in sandbox
+Phase 5: VERIFY    — wiki lint + universal organization scoring confirms improvement
 ```
 
-## MCP Server — 26 Tools
+## MCP Server — 24 Tools
 
 | Category | Tools |
 |----------|-------|
@@ -40,7 +39,7 @@ Phase 6: VERIFY   — universal organization scoring confirms improvement
 | Knowledge Map | neuraltree_knowledge_map (save/load/query) |
 | Reorganize | plan_move, plan_split, find_dead, generate_index, shrink_and_wire, split_and_wire |
 | Lessons | lesson_match, lesson_add |
-| Scoring | score, diagnose, predict, update_calibration |
+| Scoring | score, diagnose |
 | Semantic | precision (Viking search + content retrieval), viking_index (batch indexing) |
 | Wiki | wiki_lint (broken links, orphans, freshness, cross-ref density) |
 | Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
@@ -53,21 +52,20 @@ neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
 │   │   ├── __init__.py          Version 0.1.0
-│   │   ├── server.py            Entry point — registers all 26 tools
+│   │   ├── server.py            Entry point — registers all 24 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
 │   │   ├── tools/               8 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize, wiki_lint)
-│   │   ├── scoring/             3 modules (score, diagnose, predict+update_calibration)
+│   │   ├── scoring/             2 modules (score, diagnose)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
 │       ├── SKILL.md             The skill router (v2, explore-first)
-│       └── sections/            7 phase files
-│           ├── explore.md       Phase 1: parallel agent exploration
-│           ├── map.md           Phase 2: knowledge map synthesis
-│           ├── analyze.md       Phase 3: Claude-driven analysis
-│           ├── plan.md          Phase 4: reorganization proposals
-│           ├── execute.md       Phase 5: sandbox execution
-│           ├── verify.md        Phase 6: adaptive scoring
+│       └── sections/            6 phase files
+│           ├── understand.md    Phase 1: explore + map
+│           ├── analyze.md       Phase 2: Claude-driven analysis
+│           ├── plan.md          Phase 3: reorganization proposals
+│           ├── execute.md       Phase 4: sandbox execution
+│           ├── verify.md        Phase 5: adaptive scoring + wiki lint
 │           └── report.md        Output: before/after comparison
 ├── tests/                       426 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
@@ -103,10 +101,10 @@ See [concept index](docs/concepts/_INDEX.md) for deep-dive pages on each princip
 ## Integration Points (all wired and verified)
 
 1. `neuraltree_score()` returns `discoverability: null` — Skill fills it via Viking search + Claude judging
-2. `neuraltree_score()` requires `.neuraltree/knowledge_map.json` — run explore+map first
+2. `neuraltree_score()` requires `.neuraltree/knowledge_map.json` — run understand phase first
 3. `neuraltree_diagnose()` receives `viking_results` param for EMBEDDING_GAP classification
 4. `.neuraltree/state.json` is Skill-owned, not MCP-managed
-5. Lesson recording happens after autoloop KEEP/HOLD/DISCARD decisions
+5. lesson_match is called in Analyze phase to check past experience; lesson_add records failures in Verify phase
 6. Flow Score assembly: `flow_score_partial + (discoverability * 0.10)`
 
 ## Dependencies
@@ -122,7 +120,7 @@ See [concept index](docs/concepts/_INDEX.md) for deep-dive pages on each princip
 # Run tests (426 passing)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
-# Verify all 26 tools load
+# Verify all 24 tools load
 PYTHONPATH=src python3.11 -c "
 import asyncio
 from neuraltree_mcp.server import mcp
