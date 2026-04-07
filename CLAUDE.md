@@ -76,7 +76,7 @@ neuraltree/
 ├── lessons/                     Design lessons (autoloop, v2 decisions)
 ├── docs/
 │   ├── concepts/                11 concept pages (Karpathy LLM-Wiki style, one concept = one page)
-│   └── HANDOFF_*.md             Session handoff docs
+│   └── archive/                 Session handoff docs (11 files)
 ├── requirements.txt             Python dependencies
 └── README.md                    Public docs
 ```
