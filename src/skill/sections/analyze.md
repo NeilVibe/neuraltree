@@ -12,6 +12,30 @@ km_result = neuraltree_knowledge_map(action="load", project_root=".")
 km = km_result["knowledge_map"]
 ```
 
+## Step 1b: Check Lessons for Past Patterns
+
+Before reasoning about issues, check if the lesson system has relevant
+experience from prior runs.
+
+```
+# Get the list of issue types from the knowledge map
+issue_types = [issue["type"] for issue in km.get("issues", [])]
+
+# For each issue type, check lessons
+for issue_type in set(issue_types):
+    lesson_result = neuraltree_lesson_match(
+        symptom=issue_type,
+        project_root=".",
+    )
+    if lesson_result.get("matches"):
+        # Feed lesson context into Claude's analysis
+        emit(f"  Lesson found for '{issue_type}': {lesson_result['matches'][0]['lesson']}")
+```
+
+These lessons inform your reasoning in Step 2. For example, if a lesson says
+"splitting files 3+ hops from trunk made things worse," factor that into your
+severity assessment for `too_large` issues on deeply nested files.
+
 ## Step 2: Claude Analyzes the Map
 
 Read the knowledge map and reason about the project's organization.
