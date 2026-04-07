@@ -4,11 +4,14 @@ Handles the two-step Viking upload process:
   1. POST /api/v1/resources/temp_upload (multipart file upload)
   2. POST /api/v1/resources (register with target URI, wait for indexing)
 
-Used by the Skill's Enforce step to re-index modified files after AutoLoop.
+Uses ThreadPoolExecutor for parallel uploads — Model2Vec embeds at 29k/sec,
+so the bottleneck is HTTP round-trips, not the model. Parallel threads
+eliminate sequential waiting.
 """
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
@@ -82,11 +85,16 @@ def register(mcp: FastMCP) -> None:
         project_root: str = ".",
         viking_url: str = _DEFAULT_VIKING_URL,
         parent_uri: str | None = None,
+        max_workers: int = 8,
     ) -> dict:
         """Batch-index local files into Viking semantic search.
 
         For each file: uploads to Viking temp storage, then registers as a
         resource with wait=True so embeddings are ready immediately.
+
+        Uses parallel threads (default 8) to eliminate HTTP round-trip
+        bottleneck. Model2Vec embeds at 29k sentences/sec — the model
+        is never the bottleneck, the sequential HTTP calls are.
 
         Args:
             file_paths: Relative paths to files to index (relative to project_root).
@@ -94,6 +102,7 @@ def register(mcp: FastMCP) -> None:
             viking_url: Viking API base URL.
             parent_uri: Base URI for resources (e.g. "viking://resources/myproject").
                         If None, derives from project directory name.
+            max_workers: Number of parallel upload threads (default 8).
 
         Returns:
             dict with indexed count, failed count, per-file results,
@@ -134,6 +143,8 @@ def register(mcp: FastMCP) -> None:
         indexed = 0
         failed = 0
 
+        # Pre-validate all paths (fast, no I/O to Viking)
+        valid_tasks: list[tuple[str, str, str]] = []  # (rel_path, abs_path, target_uri)
         for rel_path in file_paths:
             # Block absolute paths before pathlib join (which discards root)
             if Path(rel_path).is_absolute():
@@ -158,19 +169,30 @@ def register(mcp: FastMCP) -> None:
                 results.append({"path": rel_path, "status": "error", "error": "File not found"})
                 continue
 
-            # Build target URI: parent_uri/relative_path (slashes replaced with underscores for flat namespace)
             uri_name = rel_path.replace("/", "_").replace("\\", "_")
             target_uri = f"{parent_uri}/{uri_name}"
+            valid_tasks.append((rel_path, str(abs_path), target_uri))
 
-            result = _upload_and_index(viking_url, str(abs_path), target_uri)
-            result["path"] = rel_path
-            results.append(result)
+        # Upload and index in parallel threads
+        def _process_one(task: tuple[str, str, str]) -> dict:
+            rel, absp, uri = task
+            result = _upload_and_index(viking_url, absp, uri)
+            result["path"] = rel
+            return result
 
-            if result["status"] == "ok":
-                indexed += 1
-            else:
-                failed += 1
-                warnings.append(f"Failed to index {rel_path}: {result.get('error', 'unknown')}")
+        workers = min(max_workers, len(valid_tasks)) if valid_tasks else 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_process_one, t): t for t in valid_tasks}
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                if result["status"] == "ok":
+                    indexed += 1
+                else:
+                    failed += 1
+                    warnings.append(
+                        f"Failed to index {result['path']}: {result.get('error', 'unknown')}"
+                    )
 
         return {
             "indexed": indexed,

@@ -13,7 +13,11 @@ from neuraltree_mcp.validation import validate_project_root
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    def neuraltree_scan(path: str = ".", max_files: int = 10000) -> dict:
+    def neuraltree_scan(
+        path: str = ".",
+        max_files: int = 10000,
+        exclude_patterns: list[str] | None = None,
+    ) -> dict:
         """Fast filesystem inventory.
 
         Walks the project tree collecting dirs, files, sizes, dates, and
@@ -23,6 +27,9 @@ def register(mcp: FastMCP) -> None:
         Args:
             path: Root directory to scan (default: current dir).
             max_files: Maximum files to enumerate before capping.
+            exclude_patterns: Additional directory prefixes to skip
+                (e.g. [".planning", ".claude/agents", "docs/archive"]).
+                Matched against relative paths from project root.
 
         Returns:
             dict with dirs, files, sizes, dates, empty_dirs, total_count, capped.
@@ -31,6 +38,12 @@ def register(mcp: FastMCP) -> None:
             root = validate_project_root(path)
         except ValueError as e:
             return {"error": str(e)}
+
+        # Normalize exclude patterns (strip trailing slashes)
+        extra_excludes = set()
+        if exclude_patterns:
+            for pat in exclude_patterns:
+                extra_excludes.add(pat.rstrip("/"))
 
         dirs: list[str] = []
         files: list[str] = []
@@ -44,6 +57,23 @@ def register(mcp: FastMCP) -> None:
         for dirpath, dirnames, filenames in os.walk(root):
             # Prune skipped directories in-place
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+
+            # Prune extra exclude patterns by relative path prefix
+            if extra_excludes:
+                rel_dir = os.path.relpath(dirpath, root)
+                if rel_dir == ".":
+                    rel_dir = ""
+                dirnames[:] = [
+                    d for d in dirnames
+                    if os.path.join(rel_dir, d).replace("\\", "/") not in extra_excludes
+                    and rel_dir not in extra_excludes
+                ]
+                # Skip this directory entirely if it matches
+                if rel_dir and any(
+                    rel_dir == pat or rel_dir.startswith(pat + "/")
+                    for pat in extra_excludes
+                ):
+                    continue
 
             rel_dir = os.path.relpath(dirpath, root)
             if rel_dir == ".":

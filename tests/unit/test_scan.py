@@ -28,11 +28,16 @@ def make_scan():
     import neuraltree_mcp.tools.scan as mod
 
     # Re-implement for direct calling (tools are async via MCP, test the logic)
-    def scan(path=".", max_files=10000):
+    def scan(path=".", max_files=10000, exclude_patterns=None):
         from datetime import datetime, timezone
         root = Path(path).resolve()
         if not root.is_dir():
             return {"error": f"Not a directory: {path}"}
+
+        extra_excludes = set()
+        if exclude_patterns:
+            for pat in exclude_patterns:
+                extra_excludes.add(pat.rstrip("/"))
 
         dirs, files, sizes, dates, empty_dirs = [], [], {}, {}, []
         capped = False
@@ -40,9 +45,24 @@ def make_scan():
 
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+
             rel_dir = os.path.relpath(dirpath, root)
             if rel_dir == ".":
                 rel_dir = ""
+
+            # Prune extra exclude patterns
+            if extra_excludes:
+                dirnames[:] = [
+                    d for d in dirnames
+                    if os.path.join(rel_dir, d).replace("\\", "/") not in extra_excludes
+                    and rel_dir not in extra_excludes
+                ]
+                if rel_dir and any(
+                    rel_dir == pat or rel_dir.startswith(pat + "/")
+                    for pat in extra_excludes
+                ):
+                    continue
+
             if rel_dir:
                 dirs.append(rel_dir + "/")
             if not filenames and not dirnames:
@@ -166,3 +186,42 @@ class TestScan:
 
         assert result["total_count"] == 1
         assert result["files"] == ["README.md"]
+
+    def test_exclude_patterns_basic(self, tmp_path):
+        """exclude_patterns should skip matching directories."""
+        p = tmp_path / "proj"
+        p.mkdir()
+        (p / "README.md").write_text("root")
+        (p / ".planning").mkdir()
+        (p / ".planning" / "STATE.md").write_text("state")
+        (p / ".planning" / "deep").mkdir()
+        (p / ".planning" / "deep" / "nested.md").write_text("nested")
+        (p / "docs").mkdir()
+        (p / "docs" / "guide.md").write_text("guide")
+
+        scan = make_scan()
+
+        # Without excludes — should find everything
+        result = scan(str(p))
+        all_files = result["files"]
+        assert any(".planning" in f for f in all_files)
+        assert any("guide.md" in f for f in all_files)
+
+        # With excludes — .planning should be gone
+        result = scan(str(p), exclude_patterns=[".planning"])
+        assert not any(".planning" in f for f in result["files"])
+        assert any("guide.md" in f for f in result["files"])
+
+    def test_exclude_patterns_nested(self, tmp_path):
+        """exclude_patterns should work on nested paths like docs/archive."""
+        p = tmp_path / "proj"
+        p.mkdir()
+        (p / "docs").mkdir()
+        (p / "docs" / "current.md").write_text("current")
+        (p / "docs" / "archive").mkdir()
+        (p / "docs" / "archive" / "old.md").write_text("old")
+
+        scan = make_scan()
+        result = scan(str(p), exclude_patterns=["docs/archive"])
+        assert any("current.md" in f for f in result["files"])
+        assert not any("old.md" in f for f in result["files"])
