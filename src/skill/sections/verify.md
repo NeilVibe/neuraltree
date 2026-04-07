@@ -20,6 +20,24 @@ The score reads the knowledge map and computes:
 - **size_balance** — % of files within 3× median size
 - **discoverability** — precision@3 from Viking (computed below)
 
+## Step 1b: Wiki Health Check
+
+Run wiki_lint on the sandbox to catch structural issues the score metrics miss:
+
+```
+lint_result = neuraltree_wiki_lint(project_root=sandbox_root)
+
+if lint_result.get("broken_links"):
+    emit(f"  WARNING: {len(lint_result['broken_links'])} broken links found")
+if lint_result.get("orphan_pages"):
+    emit(f"  INFO: {len(lint_result['orphan_pages'])} orphan pages")
+
+health_score = lint_result.get("health_score", 0)
+emit(f"  Wiki health: {health_score}/100")
+```
+
+If broken links > 0, flag the sandbox changes as needing review before approval.
+
 ## Step 2: Compute Discoverability (if Viking available)
 
 ```
@@ -72,6 +90,17 @@ if "approve" in response.lower():
         "actions_applied": len(approved_actions),
     }
     write_file(".neuraltree/state.json", json.dumps(state, indent=2))
+
+if "reject" in response.lower() or delta <= 0:
+    neuraltree_lesson_add(
+        lesson_text=f"## {mode} run failed (delta={delta:+.3f})\n"
+                    f"- Actions attempted: {len(approved_actions)}\n"
+                    f"- Score before: {before:.3f}, after: {after:.3f}\n"
+                    f"- Reason: {'user rejected' if 'reject' in response.lower() else 'score decreased'}",
+        domain="autoloop",
+        project_root=".",
+    )
+    emit("Lesson recorded for future runs.")
 
 neuraltree_sandbox_destroy(project_root=".")
 ```
