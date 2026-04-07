@@ -9,7 +9,7 @@ from neuraltree_mcp.tools.reorganize import (
     _find_all_references,
     _compute_rewrites,
 )
-from neuraltree_mcp.scoring.diagnose import _viking_uri_matches_file
+from neuraltree_mcp.text_utils import viking_uri_matches_file as _viking_uri_matches_file
 
 
 class TestVikingUriMatching:

@@ -122,3 +122,22 @@ def walk_project_files(root: Path, extensions: set[str] | None = None) -> list[P
             if extensions is None or p.suffix.lower() in extensions:
                 results.append(p)
     return results
+
+
+def viking_uri_matches_file(vuri: str, local_rel_path: str) -> bool:
+    """Check if a Viking URI refers to a local file, using segment matching.
+
+    Viking URIs look like:
+      viking://resources/newfin/docs/GUIDE.md/Section_Title/chunk_hash.md
+    We check if the local filename appears as an exact path segment,
+    not just a substring (avoids GUIDE.md matching DEBUGGING_GUIDE.md).
+    """
+    uri_segments = vuri.split("/")
+    basename = os.path.basename(local_rel_path)
+    if basename in uri_segments:
+        return True
+    rel_segments = local_rel_path.split("/")
+    for i in range(len(uri_segments) - len(rel_segments) + 1):
+        if uri_segments[i:i + len(rel_segments)] == rel_segments:
+            return True
+    return False

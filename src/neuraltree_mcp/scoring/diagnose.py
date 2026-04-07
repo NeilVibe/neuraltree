@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from neuraltree_mcp.text_utils import extract_keywords, walk_project_files
+from neuraltree_mcp.text_utils import extract_keywords, viking_uri_matches_file, walk_project_files
 from neuraltree_mcp.validation import validate_project_root
 
 # Gap types — universal, no formatting conventions
@@ -19,25 +19,6 @@ GAP_TYPES = {
 }
 
 _TEXT_EXTENSIONS = {".md", ".txt"}
-
-
-def _viking_uri_matches_file(vuri: str, local_rel_path: str) -> bool:
-    """Check if a Viking URI refers to a local file, using segment matching.
-
-    Viking URIs look like:
-      viking://resources/newfin/docs/GUIDE.md/Section_Title/chunk_hash.md
-    We check if the local filename appears as an exact path segment,
-    not just a substring (avoids GUIDE.md matching DEBUGGING_GUIDE.md).
-    """
-    uri_segments = vuri.split("/")
-    basename = os.path.basename(local_rel_path)
-    if basename in uri_segments:
-        return True
-    rel_segments = local_rel_path.split("/")
-    for i in range(len(uri_segments) - len(rel_segments) + 1):
-        if uri_segments[i:i + len(rel_segments)] == rel_segments:
-            return True
-    return False
 
 
 def register(mcp: FastMCP) -> None:
@@ -137,7 +118,7 @@ def register(mcp: FastMCP) -> None:
                 viking_has_match = False
                 for vuri in viking_found:
                     for mf in matching_files:
-                        if _viking_uri_matches_file(vuri, mf):
+                        if viking_uri_matches_file(vuri, mf):
                             viking_has_match = True
                             break
                     if viking_has_match:
