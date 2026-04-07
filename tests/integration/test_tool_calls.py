@@ -251,27 +251,6 @@ class TestDiagnoseTool:
         assert diag["gap_type"] in ("ISOLATION_GAP", "CONTENT_GAP")
 
 
-class TestPredictTool:
-    def test_predict_returns_correct_shape(self, tmp_project):
-        result = call_tool("neuraltree_predict", {
-            "current_metrics": {
-                "reachability": 0.3,
-                "connectivity": 0.4,
-                "cluster_coherence": 0.5,
-                "size_balance": 0.6,
-                "discoverability": 0.1,
-            },
-            "proposed_changes": [
-                {"action": "connect", "target": "auth.md", "details": "add references"},
-            ],
-            "project_root": str(tmp_project),
-        })
-        assert "current_flow_score" in result
-        assert "predicted_flow_score" in result
-        assert "predicted_delta" in result
-        assert "confidence" in result
-        assert result["predicted_delta"] > 0
-
 
 class TestLessonMatchTool:
     def test_lesson_match_via_mcp(self, tmp_project):

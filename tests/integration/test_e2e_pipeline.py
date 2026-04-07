@@ -1,7 +1,7 @@
 """End-to-end pipeline tests against a real project (newfin).
 
-Simulates what an agent following SKILL.md Section 4 would do:
-scan the project, generate queries, score it, diagnose failures, predict improvements.
+Simulates what an agent following SKILL.md would do:
+scan the project, generate queries, score it, diagnose failures.
 """
 import asyncio
 import json
@@ -97,31 +97,6 @@ class TestBenchmarkPipeline:
         # fix_priority should list all diagnoses sorted by priority
         assert "fix_priority" in result
         assert len(result["fix_priority"]) == 3
-
-    def test_predict_impact(self, newfin_project):
-        """Predict should estimate improvement from proposed changes."""
-        # Score requires knowledge map — use fallback metrics
-        metrics = {
-            "reachability": 0.5, "connectivity": 0.5,
-            "cluster_coherence": 0.5, "size_balance": 0.5,
-            "discoverability": None,
-        }
-
-        result = call_tool("neuraltree_predict", {
-            "current_metrics": metrics,
-            "proposed_changes": [
-                {"action": "connect", "target": "memory/reference/auth.md", "details": "Add references"},
-                {"action": "split", "target": "memory/rules/coding.md", "details": "Split large file"},
-            ],
-            "project_root": str(newfin_project),
-        })
-        assert "error" not in result
-        assert result["predicted_delta"] >= 0
-        assert 0.0 <= result["confidence"] <= 1.0
-        assert len(result["change_impacts"]) == 2
-        assert "current_flow_score" in result
-        assert "predicted_flow_score" in result
-        assert result["predicted_flow_score"] >= result["current_flow_score"]
 
 
 class TestBackupRestore:
@@ -286,34 +261,6 @@ class TestLessonRoundTrip:
         assert top[0]["score"] > 0.2
 
 
-class TestCalibration:
-    """Calibration update and accumulation tests."""
-
-    def test_update_calibration(self, tmp_project):
-        """Update calibration and verify accuracy changes."""
-        # First update — predicted 0.10, actual 0.08 (close)
-        result = call_tool("neuraltree_update_calibration", {
-            "predicted_delta": 0.10,
-            "actual_delta": 0.08,
-            "project_root": str(tmp_project),
-        })
-        assert result["old_accuracy"] == 0.5  # default start
-        assert result["new_accuracy"] != 0.5  # should have changed
-        assert result["total_runs"] == 1
-
-        # Second update — verify it accumulates
-        result2 = call_tool("neuraltree_update_calibration", {
-            "predicted_delta": 0.05,
-            "actual_delta": 0.04,
-            "project_root": str(tmp_project),
-        })
-        assert result2["total_runs"] == 2
-        assert result2["old_accuracy"] == result["new_accuracy"]
-
-        # Verify file was written
-        cal_file = tmp_project / ".neuraltree" / "calibration.json"
-        assert cal_file.exists()
-
 
 class TestTrace:
     """Trace tool tests — reference graph traversal."""
@@ -341,72 +288,3 @@ class TestTrace:
         assert result["is_alive"] is False or len(result["referenced_by"]) == 0
 
 
-class TestAutoLoopCycle:
-    """Simulate one autoloop iteration: predict -> backup -> modify -> score -> restore."""
-
-    def test_predict_backup_execute_restore_cycle(self, tmp_project):
-        """Simulate one autoloop iteration: predict -> backup -> modify -> restore."""
-        import json
-        target_rel = "memory/rules/coding.md"
-        original = (tmp_project / target_rel).read_text()
-
-        # Create knowledge map so score works
-        nt_dir = tmp_project / ".neuraltree"
-        nt_dir.mkdir(exist_ok=True)
-        km = {
-            "files": {
-                "CLAUDE.md": {"size_lines": 50},
-                "memory/MEMORY.md": {"size_lines": 20},
-                "memory/rules/coding.md": {"size_lines": 30},
-            },
-            "edges": [
-                {"source": "CLAUDE.md", "target": "memory/MEMORY.md", "type": "reference"},
-                {"source": "memory/MEMORY.md", "target": "memory/rules/coding.md", "type": "reference"},
-            ],
-            "clusters": [{"files": ["memory/MEMORY.md", "memory/rules/coding.md"]}],
-        }
-        (nt_dir / "knowledge_map.json").write_text(json.dumps(km))
-
-        # 1. Score before
-        before = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
-        assert "metrics" in before
-
-        # 2. Predict
-        prediction = call_tool("neuraltree_predict", {
-            "current_metrics": before["metrics"],
-            "proposed_changes": [
-                {"action": "connect", "target": target_rel, "details": "test"},
-            ],
-            "project_root": str(tmp_project),
-        })
-        assert prediction["predicted_delta"] >= 0
-
-        # 3. Backup
-        backup = call_tool("neuraltree_backup", {
-            "files": [target_rel],
-            "project_root": str(tmp_project),
-        })
-        assert len(backup["backed_up"]) == 1
-
-        # 4. Execute (simulate modification)
-        (tmp_project / target_rel).write_text(original + "\nMore content about coding.\n")
-
-        # 5. Score after
-        after = call_tool("neuraltree_score", {"project_root": str(tmp_project)})
-
-        # 6. Decide — if worse, restore
-        actual_delta = after["flow_score_partial"] - before["flow_score_partial"]
-        if actual_delta < 0:
-            call_tool("neuraltree_restore", {
-                "files": [target_rel],
-                "project_root": str(tmp_project),
-            })
-            assert (tmp_project / target_rel).read_text() == original
-
-        # 7. Update calibration
-        cal = call_tool("neuraltree_update_calibration", {
-            "predicted_delta": prediction["predicted_delta"],
-            "actual_delta": actual_delta,
-            "project_root": str(tmp_project),
-        })
-        assert cal["total_runs"] == 1
