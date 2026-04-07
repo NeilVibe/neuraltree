@@ -11,6 +11,8 @@ from neuraltree_mcp.tools.wiki_lint import (
     _check_inbound_links,
     _collect_md_files,
     _extract_links,
+    _is_entry_point,
+    _is_in_archive,
     _resolve_link,
     register,
 )
@@ -225,7 +227,7 @@ class TestWikiLintTool:
         data = json.loads(result.content[0].text)
         assert data["total_pages"] == 4
         assert data["total_broken"] == 1  # nonexistent.md
-        assert data["total_orphans"] == 2  # orphan.md + _INDEX.md (nothing links to index)
+        assert data["total_orphans"] == 1  # orphan.md only (_INDEX.md auto-excluded as entry point)
         assert "health_score" in data
         assert 0 <= data["health_score"] <= 100
 
@@ -274,3 +276,90 @@ class TestWikiLintTool:
         # 4 pages, concept-a has 2 inbound, concept-b has 2, index has 2 (from a and b), orphan has 0
         # Total inbound = 6, density = 6/4 = 1.5
         assert data["cross_ref_density"] > 0
+
+    @pytest.mark.asyncio
+    async def test_trunk_auto_detection(self, mcp_with_lint, wiki_project):
+        """Entry points like _INDEX.md are auto-excluded from orphans."""
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {"project_root": str(wiki_project)},
+        )
+        data = json.loads(result.content[0].text)
+        assert "_INDEX.md" in data["trunk_files"]
+        orphan_files = [o["file"] for o in data["orphan_pages"]]
+        assert "_INDEX.md" not in orphan_files
+        assert "orphan.md" in orphan_files
+
+    @pytest.mark.asyncio
+    async def test_trunk_paths_override(self, mcp_with_lint, wiki_project):
+        """Explicit trunk_paths excludes specified files from orphan detection."""
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {
+                "project_root": str(wiki_project),
+                "trunk_paths": ["_INDEX.md", "orphan.md"],
+            },
+        )
+        data = json.loads(result.content[0].text)
+        assert data["total_orphans"] == 0
+        assert "orphan.md" in data["trunk_files"]
+
+    @pytest.mark.asyncio
+    async def test_archive_auto_exclusion(self, mcp_with_lint, tmp_path):
+        """Files in archive/ directories are auto-excluded from orphans."""
+        # Create a normal file and an archived file
+        normal = tmp_path / "normal.md"
+        normal.write_text("# Normal\nNo links here.\n")
+
+        archive_dir = tmp_path / "archive"
+        archive_dir.mkdir()
+        archived = archive_dir / "old-doc.md"
+        archived.write_text("# Old Doc\nArchived content.\n")
+
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {"project_root": str(tmp_path)},
+        )
+        data = json.loads(result.content[0].text)
+        orphan_files = [o["file"] for o in data["orphan_pages"]]
+        assert "normal.md" in orphan_files
+        assert "archive/old-doc.md" not in orphan_files
+
+    @pytest.mark.asyncio
+    async def test_exclude_dirs_param(self, mcp_with_lint, tmp_path):
+        """Custom exclude_dirs skips those directories from orphan detection."""
+        custom_dir = tmp_path / "legacy"
+        custom_dir.mkdir()
+        legacy = custom_dir / "old.md"
+        legacy.write_text("# Legacy\n")
+
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {
+                "project_root": str(tmp_path),
+                "exclude_dirs": ["legacy"],
+            },
+        )
+        data = json.loads(result.content[0].text)
+        orphan_files = [o["file"] for o in data["orphan_pages"]]
+        assert "legacy/old.md" not in orphan_files
+
+
+# --- Helper function tests ---
+
+
+class TestHelpers:
+    def test_is_entry_point(self):
+        assert _is_entry_point("README.md") is True
+        assert _is_entry_point("CLAUDE.md") is True
+        assert _is_entry_point("_INDEX.md") is True
+        assert _is_entry_point("docs/README.md") is True
+        assert _is_entry_point("random-file.md") is False
+
+    def test_is_in_archive(self):
+        assert _is_in_archive("archive/old.md") is True
+        assert _is_in_archive("docs/archive/session5.md") is True
+        assert _is_in_archive("old/stuff.md") is True
+        assert _is_in_archive("deprecated/legacy.md") is True
+        assert _is_in_archive("docs/concepts/foo.md") is False
+        assert _is_in_archive("active/current.md") is False

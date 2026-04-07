@@ -25,6 +25,25 @@ from neuraltree_mcp.validation import validate_project_root
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")  # [text](target)
 _WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")  # [[target]] or [[target|alias]]
 
+# Entry-point filenames — never orphans (they're root navigation nodes)
+_ENTRY_POINT_NAMES = {
+    "readme.md", "claude.md", "memory.md", "index.md", "_index.md",
+    "overview.md", "getting-started.md", "introduction.md",
+}
+
+# Directories whose files are intentionally disconnected
+_ARCHIVE_DIR_NAMES = {"archive", "old", "deprecated"}
+
+
+def _is_entry_point(rel_path: str) -> bool:
+    """Check if a file is a known entry point (trunk node)."""
+    return Path(rel_path).name.lower() in _ENTRY_POINT_NAMES
+
+
+def _is_in_archive(rel_path: str) -> bool:
+    """Check if a file lives in an archive directory."""
+    return any(part in _ARCHIVE_DIR_NAMES for part in Path(rel_path).parts)
+
 
 def _collect_md_files(root: Path, extensions: list[str] | None = None) -> list[Path]:
     """Collect all markdown files under root."""
@@ -156,12 +175,15 @@ def register(mcp: FastMCP) -> None:
         project_root: str = ".",
         max_age_days: int = 30,
         extensions: list[str] | None = None,
+        trunk_paths: list[str] | None = None,
+        exclude_dirs: list[str] | None = None,
     ) -> dict:
         """Lint a markdown wiki for broken links, orphans, and staleness.
 
         Runs 4 deterministic health checks:
         1. Broken links — internal links pointing to non-existent files
         2. Orphan pages — pages with zero inbound links
+           (entry points and archive files auto-excluded)
         3. Stale pages — files not modified in max_age_days
         4. Cross-reference density — avg inbound links per page
 
@@ -172,6 +194,11 @@ def register(mcp: FastMCP) -> None:
             project_root: Project root directory.
             max_age_days: Flag pages older than this as stale (default 30).
             extensions: File extensions to check (default [".md"]).
+            trunk_paths: Explicit entry-point paths to exclude from orphan
+                         detection. If None, auto-detects (readme.md,
+                         claude.md, memory.md, index.md, etc.).
+            exclude_dirs: Directory names to exclude from orphan detection
+                          (default: auto-detects archive, old, deprecated).
 
         Returns:
             dict with broken_links, orphan_pages, stale_pages,
@@ -197,12 +224,29 @@ def register(mcp: FastMCP) -> None:
         # 1. Broken links
         broken = _check_broken_links(files, root)
 
-        # 2. Orphan pages (zero inbound links)
+        # 2. Orphan pages (zero inbound links, excluding trunk + archive)
         inbound = _check_inbound_links(files, root)
+
+        # Build exclusion sets
+        if trunk_paths is not None:
+            trunk_set = set(trunk_paths)
+        else:
+            trunk_set = {f for f in inbound if _is_entry_point(f)}
+
+        extra_archive = set(exclude_dirs) if exclude_dirs else set()
+        def _excluded(f: str) -> bool:
+            if f in trunk_set:
+                return True
+            if _is_in_archive(f):
+                return True
+            if extra_archive:
+                return any(part in extra_archive for part in Path(f).parts)
+            return False
+
         orphans = [
             {"file": f, "inbound_count": 0}
             for f, sources in inbound.items()
-            if len(sources) == 0
+            if len(sources) == 0 and not _excluded(f)
         ]
 
         # 3. Stale pages
@@ -239,5 +283,6 @@ def register(mcp: FastMCP) -> None:
             "total_broken": len(broken),
             "total_orphans": len(orphans),
             "total_stale": len(stale),
+            "trunk_files": sorted(trunk_set),
             "warnings": [],
         }
