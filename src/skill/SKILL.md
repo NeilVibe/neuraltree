@@ -20,12 +20,11 @@ This file is the **router**. Detailed instructions for each phase live in
 
 ```
 SKILL.md (this file)        — always loaded: activation + principles + routing
-sections/explore.md         — Phase 1: parallel agent exploration
-sections/map.md             — Phase 2: knowledge map synthesis
-sections/analyze.md         — Phase 3: Claude-driven issue analysis
-sections/plan.md            — Phase 4: reorganization proposals
-sections/execute.md         — Phase 5: sandbox execution
-sections/verify.md          — Phase 6: adaptive scoring verification
+sections/understand.md      — Phase 1: explore + map (parallel agents + knowledge graph)
+sections/analyze.md         — Phase 2: Claude-driven issue analysis
+sections/plan.md            — Phase 3: reorganization proposals
+sections/execute.md         — Phase 4: sandbox execution
+sections/verify.md          — Phase 5: adaptive scoring verification
 sections/report.md          — Output: before/after comparison
 ```
 
@@ -119,8 +118,8 @@ Read `.neuraltree/knowledge_map.json` and `.neuraltree/state.json`.
 
 | Condition | Mode | Pipeline |
 |-----------|------|----------|
-| No knowledge map | **full** | Explore → Map → Analyze → Plan → Execute → Verify |
-| Map exists, stale (>7 days) | **refresh** | Explore → Map → Analyze → Plan → Execute → Verify |
+| No knowledge map | **full** | Understand → Analyze → Plan → Execute → Verify |
+| Map exists, stale (>7 days) | **refresh** | Understand → Analyze → Plan → Execute → Verify |
 | Map exists, recent, score < 0.60 | **fix** | Analyze → Plan → Execute → Verify |
 | Map exists, recent, score >= 0.60 | **check** | Verify only (quick re-score) |
 
@@ -160,7 +159,7 @@ Pipeline: {phase_list}
 | Subcommand | Pipeline |
 |------------|----------|
 | `/neuraltree` | Mode-detected pipeline |
-| `/neuraltree explore` | Explore + Map only |
+| `/neuraltree explore` | Understand only (explore + map) |
 | `/neuraltree analyze` | Analyze only (uses existing map) |
 | `/neuraltree fix` | Analyze → Plan → Execute → Verify |
 | `/neuraltree verify` | Verify only (quick re-score) |
@@ -173,37 +172,33 @@ Pipeline: {phase_list}
 
 **After activation completes, execute phases by reading section files in order.**
 
-### Phase 1: Explore
-**Read `sections/explore.md` and execute all steps.**
+### Phase 1: Understand
+**Read `sections/understand.md` and execute all steps.**
 Launch N explorer agents in parallel. Each reads a directory slice deeply.
-Reports: per-file metadata, per-directory assessment, cross-references found.
-
-### Phase 2: Map
-**Read `sections/map.md` and execute all steps.**
 Synthesize explorer reports into dual-layer knowledge map.
 Layer 1: file graph (nodes + edges). Layer 2: concept clusters.
 Save to `.neuraltree/knowledge_map.json`.
 
-### Phase 3: Analyze
+### Phase 2: Analyze
 **Read `sections/analyze.md` and execute all steps.**
 Claude reads the knowledge map and REASONS about what's wrong.
 No formulas — understanding-driven issue identification.
 Output: issues list with severity + proposed fixes.
 *Skip if no issues found in map.*
 
-### Phase 4: Plan
+### Phase 3: Plan
 **Read `sections/plan.md` and execute all steps.**
 Convert issues into concrete actions. Trace before destructive changes.
 Show user: "Here's what I'd change and why." User approves per-item.
 *Skip if no issues.*
 
-### Phase 5: Execute
+### Phase 4: Execute
 **Read `sections/execute.md` and execute all steps.**
 Apply approved changes in sandbox. Wire new/moved files. Re-index Viking.
 Verify no broken references.
 *Skip if no approved actions.*
 
-### Phase 6: Verify
+### Phase 5: Verify
 **Read `sections/verify.md` and execute all steps.**
 Score with adaptive mode. Compare before/after.
 Score VALIDATES the changes — it doesn't drive them.

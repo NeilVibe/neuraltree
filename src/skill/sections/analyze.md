@@ -142,7 +142,7 @@ high = analysis["by_severity"]["high"]
 medium = analysis["by_severity"]["medium"]
 low = analysis["by_severity"]["low"]
 
-emit(f"Phase 3/6: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
+emit(f"Phase 2/5: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
 ```
 
 **If no issues found:** Skip to Verify.

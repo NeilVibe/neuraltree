@@ -63,7 +63,7 @@ before = load_state().get("flow_score", 0)
 after = final_score
 delta = after - before
 
-emit(f"Phase 6/6: Score {before:.2f} → {after:.2f} ({delta:+.2f})")
+emit(f"Phase 5/5: Score {before:.2f} → {after:.2f} ({delta:+.2f})")
 ```
 
 ## Step 4: Sandbox Approval
