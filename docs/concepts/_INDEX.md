@@ -12,7 +12,7 @@
 
 ## Architecture
 
-- [Explore First Pipeline](explore-first-pipeline.md) — The 6-phase pipeline: Explore, Map, Analyze, Plan, Execute, Verify
+- [Index-First Pipeline](index-first-pipeline.md) — The 7-phase pipeline: Index, Explore, Map, Analyze, Plan, Execute, Verify
 - [Flow Score](flow-score.md) — Universal organization quality metric (0-100)
 - [Knowledge Map](knowledge-map.md) — Dual-layer map of project structure and connections
 - [Viking Semantic Search](viking-semantic-search.md) — Model2Vec embeddings for concept-level search

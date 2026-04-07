@@ -7,7 +7,7 @@ type: concept
 
 **Dual-layer map of project structure and connections.**
 
-The Knowledge Map is NeuralTree's internal representation of a project's information architecture. It's built during the Map phase of the [Explore-First Pipeline](explore-first-pipeline.md).
+The Knowledge Map is NeuralTree's internal representation of a project's information architecture. It's built during the Map phase of the [Index-First Pipeline](index-first-pipeline.md).
 
 ## Two Layers
 
@@ -16,7 +16,7 @@ The Knowledge Map is NeuralTree's internal representation of a project's informa
 
 ## How It's Built
 
-1. [Explore phase](explore-first-pipeline.md) agents read every file with `neuraltree_scan`
+1. [Index phase](index-first-pipeline.md) tools scan and score all files; [Explore phase](index-first-pipeline.md) agents read problem areas
 2. Map phase synthesizes findings into `neuraltree_knowledge_map` (saved as `.neuraltree/knowledge_map.json`)
 3. Connections are discovered via `neuraltree_wire` (keyword overlap) and [Viking](viking-semantic-search.md) (semantic similarity)
 
@@ -29,6 +29,6 @@ The Knowledge Map is NeuralTree's internal representation of a project's informa
 
 ## Related
 
-- [Explore First Pipeline](explore-first-pipeline.md) — map is built in Phase 2
+- [Index-First Pipeline](index-first-pipeline.md) — map is built in Phase 3
 - [Flow Score](flow-score.md) — map feeds multiple score components
 - [Viking Semantic Search](viking-semantic-search.md) — adds semantic edges to the map

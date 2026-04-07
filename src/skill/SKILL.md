@@ -3,15 +3,14 @@ name: neuraltree
 description: >
   Universal neural organization — explores, maps, and reorganizes project
   knowledge so any fact is reachable in 0-2 hops.
-version: 2.0.0
+version: 3.0.0
 tools_required:
   - neuraltree-mcp (24 tools — includes Viking search + knowledge map)
 ---
 
-# /neuraltree — Universal Neural Organization Skill v2
+# /neuraltree — Universal Neural Organization Skill v3
 
-> You are the brain. neuraltree-mcp is the muscle. Viking is the memory.
-> Your job: UNDERSTAND first, then organize.
+> Index everything. Then explore what's broken. Then fix it.
 
 ## How This Skill Works
 
@@ -20,11 +19,13 @@ This file is the **router**. Detailed instructions for each phase live in
 
 ```
 SKILL.md (this file)        — always loaded: activation + principles + routing
-sections/understand.md      — Phase 1: explore + map (parallel agents + knowledge graph)
-sections/analyze.md         — Phase 2: Claude-driven issue analysis
-sections/plan.md            — Phase 3: reorganization proposals
-sections/execute.md         — Phase 4: sandbox execution
-sections/verify.md          — Phase 5: adaptive scoring verification
+sections/index.md           — Phase 1: FULL indexing (Viking + wiki_lint + score + diagnose)
+sections/explore.md         — Phase 2: targeted agent exploration (problem areas only)
+sections/map.md             — Phase 3: knowledge map synthesis
+sections/analyze.md         — Phase 4: Claude-driven issue analysis
+sections/plan.md            — Phase 5: reorganization proposals
+sections/execute.md         — Phase 6: sandbox execution
+sections/verify.md          — Phase 7: adaptive scoring verification
 sections/report.md          — Output: before/after comparison
 ```
 
@@ -32,15 +33,20 @@ sections/report.md          — Output: before/after comparison
 
 ---
 
-## v1 vs v2 — What Changed
+## v2 vs v3 — What Changed
 
-| v1 (metric-driven) | v2 (understanding-first) |
-|--------------------|--------------------------|
-| Score first, fix what formula says | Explore first, understand, then fix |
-| Hardcoded weights (0.25, 0.20...) | Adaptive thresholds from project shape |
-| Single-threaded autoloop | Parallel explorer agents (2-10) |
-| Keyword Jaccard similarity | Deep reading + concept clustering |
-| No knowledge map | Persistent dual-layer knowledge map |
+| v2 (explore-first) | v3 (index-first) |
+|--------------------|-------------------|
+| Explore everything, then score | Index + score + lint FIRST, then explore problems |
+| 10 agents read 128 files each (too shallow) | Targeted agents on problem areas only (deep) |
+| Viking skipped at scale (too many queries) | Viking batch-indexed upfront, queries batched |
+| 14 of 24 tools unused | ALL 24 tools used in pipeline |
+| Explorer reports = prose (lost in translation) | Index data = structured (feeds map directly) |
+| Same pipeline for 30 and 3000 files | Scale-aware: full / targeted / sampled |
+
+**Core insight:** The tools (wiki_lint, score, diagnose, find_dead, precision)
+give you the full quantitative picture in seconds. Agent exploration should
+target the PROBLEMS those tools find, not blanket-read everything.
 
 ---
 
@@ -70,8 +76,11 @@ These are operations you perform directly (not MCP tools). Use your native capab
 | Lessons | `neuraltree_lesson_match`, `neuraltree_lesson_add` |
 | Scoring | `neuraltree_score` (with adaptive mode), `neuraltree_diagnose` |
 | Semantic | `neuraltree_precision`, `neuraltree_viking_index` |
-| Knowledge Map | `neuraltree_knowledge_map` (save/load/query) |
+| Knowledge Map | `neuraltree_knowledge_map` (save/load/query/build) |
+| Wiki | `neuraltree_wiki_lint` (broken links, orphans, freshness, cross-ref density) |
 | Sandbox | `neuraltree_sandbox_create`, `neuraltree_sandbox_diff`, `neuraltree_sandbox_apply`, `neuraltree_sandbox_destroy` |
+
+**All 24 tools are used in the pipeline. None are optional.**
 
 ---
 
@@ -91,7 +100,7 @@ These are operations you perform directly (not MCP tools). Use your native capab
 
 ### Decision Rules
 
-1. **Understand before fixing.** Explore and map first. Only intervene where the map shows a problem.
+1. **Index before exploring.** Let the tools tell you where the problems are.
 2. **Trace before prune.** NEVER delete without calling `neuraltree_trace()` first.
 3. **Show both sides.** Reports show KEPT and DELETED/CHANGED with proof.
 4. **User approves destructive actions.** Wiring/indexing = auto. Deletes/moves/splits = ask.
@@ -118,10 +127,10 @@ Read `.neuraltree/knowledge_map.json` and `.neuraltree/state.json`.
 
 | Condition | Mode | Pipeline |
 |-----------|------|----------|
-| No knowledge map | **full** | Understand → Analyze → Plan → Execute → Verify |
-| Map exists, stale (>7 days) | **refresh** | Understand → Analyze → Plan → Execute → Verify |
-| Map exists, recent, score < 0.60 | **fix** | Analyze → Plan → Execute → Verify |
-| Map exists, recent, score >= 0.60 | **check** | Verify only (quick re-score) |
+| No knowledge map | **full** | Index → Explore → Map → Analyze → Plan → Execute → Verify |
+| Map exists, stale (>7 days) | **refresh** | Index → Explore → Map → Analyze → Plan → Execute → Verify |
+| Map exists, recent, score < 0.60 | **fix** | Index → Analyze → Plan → Execute → Verify |
+| Map exists, recent, score >= 0.60 | **check** | Verify only (quick re-score + wiki_lint) |
 
 ### Step 3: Determine Agent Count
 
@@ -140,6 +149,10 @@ elif total_kb_files < 1000:   agent_count = 7
 else:                         agent_count = 10
 ```
 
+**Note:** For large projects (300+), the actual number of agents used in
+Phase 2 may be LESS than `agent_count` because exploration is targeted.
+The Index phase determines how many files actually need deep reading.
+
 ### Step 4: Acquire Lock + Emit Status
 
 Lock file: `.neuraltree/.lock` (contains ISO 8601 timestamp).
@@ -149,7 +162,7 @@ Lock file: `.neuraltree/.lock` (contains ISO 8601 timestamp).
 
 ```
 /neuraltree — Activation Complete
-Mode: {mode} | Agents: {agent_count} | Files: {total_kb_files}
+Mode: {mode} | Max Agents: {agent_count} | Files: {total_kb_files}
 Tools: neuraltree-mcp ✓ (24 tools) | Viking: ✓|DEGRADED
 Pipeline: {phase_list}
 ```
@@ -159,10 +172,11 @@ Pipeline: {phase_list}
 | Subcommand | Pipeline |
 |------------|----------|
 | `/neuraltree` | Mode-detected pipeline |
-| `/neuraltree explore` | Understand only (explore + map) |
+| `/neuraltree index` | Index only (full indexing, no exploration) |
+| `/neuraltree explore` | Index + Explore + Map only |
 | `/neuraltree analyze` | Analyze only (uses existing map) |
-| `/neuraltree fix` | Analyze → Plan → Execute → Verify |
-| `/neuraltree verify` | Verify only (quick re-score) |
+| `/neuraltree fix` | Index → Analyze → Plan → Execute → Verify |
+| `/neuraltree verify` | Verify only (quick re-score + wiki_lint) |
 | `/neuraltree map` | Show knowledge map summary |
 | `/neuraltree auto` | Full pipeline regardless of mode |
 
@@ -172,33 +186,45 @@ Pipeline: {phase_list}
 
 **After activation completes, execute phases by reading section files in order.**
 
-### Phase 1: Understand
-**Read `sections/understand.md` and execute all steps.**
-Launch N explorer agents in parallel. Each reads a directory slice deeply.
-Synthesize explorer reports into dual-layer knowledge map.
+### Phase 1: Index
+**Read `sections/index.md` and execute all steps.**
+Full project indexing: Viking batch index, wiki_lint, score, diagnose,
+find_dead, semantic precision queries, lesson matching.
+This gives the complete quantitative picture BEFORE any agent exploration.
+
+### Phase 2: Explore
+**Read `sections/explore.md` and execute all steps.**
+Scale-aware exploration:
+- **< 300 files:** Read everything deeply (v2 behavior).
+- **300-2000 files:** Only explore problem areas from Index phase.
+- **2000+ files:** Sample + problem areas.
+
+### Phase 3: Map
+**Read `sections/map.md` and execute all steps.**
+Synthesize explorer reports + Index semantic edges into dual-layer knowledge map.
 Layer 1: file graph (nodes + edges). Layer 2: concept clusters.
 Save to `.neuraltree/knowledge_map.json`.
 
-### Phase 2: Analyze
+### Phase 4: Analyze
 **Read `sections/analyze.md` and execute all steps.**
 Claude reads the knowledge map and REASONS about what's wrong.
 No formulas — understanding-driven issue identification.
 Output: issues list with severity + proposed fixes.
 *Skip if no issues found in map.*
 
-### Phase 3: Plan
+### Phase 5: Plan
 **Read `sections/plan.md` and execute all steps.**
 Convert issues into concrete actions. Trace before destructive changes.
 Show user: "Here's what I'd change and why." User approves per-item.
 *Skip if no issues.*
 
-### Phase 4: Execute
+### Phase 6: Execute
 **Read `sections/execute.md` and execute all steps.**
 Apply approved changes in sandbox. Wire new/moved files. Re-index Viking.
 Verify no broken references.
 *Skip if no approved actions.*
 
-### Phase 5: Verify
+### Phase 7: Verify
 **Read `sections/verify.md` and execute all steps.**
 Score with adaptive mode. Compare before/after.
 Score VALIDATES the changes — it doesn't drive them.

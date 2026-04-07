@@ -33,5 +33,5 @@ This split was formalized in v2 after v1 tried to encode too much judgment in to
 ## Related
 
 - [Flow Score](flow-score.md) — tools compute partial score, Claude judges discoverability
-- [Explore First Pipeline](explore-first-pipeline.md) — tools explore, Claude analyzes
+- [Index-First Pipeline](index-first-pipeline.md) — tools index, agents explore, Claude analyzes
 - [Autoloop](autoloop.md) — tools propose, Claude decides KEEP/HOLD/DISCARD

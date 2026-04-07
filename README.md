@@ -124,36 +124,39 @@ The Flow Score is a single number (0.0-1.0) that tells you whether information i
 | Command | Pipeline | Description |
 |---------|----------|-------------|
 | `/neuraltree` | Auto-detected | Detects mode from project state and runs the appropriate pipeline. |
-| `/neuraltree understand` | Understand | Deep parallel exploration and knowledge map generation only. |
+| `/neuraltree index` | Index only | Full indexing (Viking, wiki_lint, score, diagnose) — no exploration. |
+| `/neuraltree explore` | Index + Explore + Map | Index then targeted exploration and knowledge map generation. |
 | `/neuraltree analyze` | Analyze only | Uses existing knowledge map to identify issues. |
-| `/neuraltree fix` | Analyze → Plan → Execute → Verify | Jump straight to fixing — requires existing knowledge map. |
-| `/neuraltree verify` | Verify only | Quick re-score with wiki lint + adaptive thresholds. |
+| `/neuraltree fix` | Index → Analyze → Plan → Execute → Verify | Jump straight to fixing — requires existing knowledge map. |
+| `/neuraltree verify` | Verify only | Quick re-score with wiki lint. |
 | `/neuraltree map` | Show map | Display knowledge map summary (concept clusters, file graph). |
-| `/neuraltree auto` | Full pipeline | Understand → Analyze → Plan → Execute → Verify. Always runs everything. |
+| `/neuraltree auto` | Full pipeline | Index → Explore → Map → Analyze → Plan → Execute → Verify. Always runs everything. |
 
 ---
 
 ## How It Works
 
-### The Pipeline (v2 — Explore-First)
+### The Pipeline (v3 — Index-First)
 
 ```
 1. ACTIVATE    Verify tools, detect mode, acquire lock, scale agent count to project size
-2. UNDERSTAND  Launch 2-10 parallel explorer agents, synthesize into dual-layer knowledge map
-3. ANALYZE     Check past lessons, Claude reads the map and REASONS about what's wrong
-4. PLAN        Propose concrete reorganization actions — user approves per-item
-5. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
-6. VERIFY      Wiki lint + adaptive scoring confirms improvement — thresholds derived from project shape
+2. INDEX       Viking batch index, wiki_lint, score, diagnose, find_dead, precision queries
+3. EXPLORE     Targeted agents on problem areas only (scale-aware: full / targeted / sampled)
+4. MAP         Build knowledge map from index data + explorer reports
+5. ANALYZE     Check past lessons, Claude reads the map and REASONS about what's wrong
+6. PLAN        Propose concrete reorganization actions — user approves per-item
+7. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
+8. VERIFY      Wiki lint + scoring confirms improvement
 ```
 
-### Explore-First vs Metric-First
+### Index-First vs Explore-First
 
-v1 scored first, then fixed what the formula said. v2 **understands first**:
+v2 explored everything, then scored. v3 **indexes first**:
 
-- **Explorer agents** read every knowledge file, not just scan metadata
-- **Knowledge map** captures both structure (file graph) and meaning (concept clusters)
-- **Claude reasons** about gaps instead of following hardcoded weights
-- **Adaptive scoring** derives thresholds from the project's actual shape, not fixed numbers
+- **All 24 tools run upfront** — quantitative health picture in seconds
+- **Targeted exploration** — agents only read problem areas, not everything
+- **Scale-aware** — full (<300 files), targeted (300-2000), sampled (2000+)
+- **Checkpoints** — each phase saves JSON to `.neuraltree/` for session recovery
 
 Safe actions (wiring, indexing) are applied automatically. Destructive actions (deletes, moves, splits) are always held for your approval. All changes happen in a **sandbox** (isolated git worktree) first.
 
@@ -261,8 +264,8 @@ neuraltree/
 │   │   ├── scoring/             score, diagnose
 │   │   └── sandbox/             sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 │   └── skill/
-│       ├── SKILL.md             Skill router (v2, explore-first)
-│       └── sections/            6 phase files (understand, analyze, plan, execute, verify, report)
+│       ├── SKILL.md             Skill router (v3, index-first)
+│       └── sections/            7 phase files + report (index, explore, map, analyze, plan, execute, verify)
 ├── tests/
 │   ├── unit/                    11 test files
 │   └── integration/             5 test files (end-to-end via mcp.call_tool())

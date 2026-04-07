@@ -25,4 +25,4 @@ The Artery Principle is NeuralTree's core design philosophy. A well-organized pr
 
 - [0-1-2 Hop Rule](hop-rule.md)
 - [Flow Score](flow-score.md)
-- [Explore First Pipeline](explore-first-pipeline.md)
+- [Index-First Pipeline](index-first-pipeline.md)

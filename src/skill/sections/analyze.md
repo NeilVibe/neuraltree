@@ -12,30 +12,6 @@ km_result = neuraltree_knowledge_map(action="load", project_root=".")
 km = km_result["knowledge_map"]
 ```
 
-## Step 1b: Check Lessons for Past Patterns
-
-Before reasoning about issues, check if the lesson system has relevant
-experience from prior runs.
-
-```
-# Get the list of issue types from the knowledge map
-issue_types = [issue["type"] for issue in km.get("issues", [])]
-
-# For each issue type, check lessons
-for issue_type in set(issue_types):
-    lesson_result = neuraltree_lesson_match(
-        symptom=issue_type,
-        project_root=".",
-    )
-    if lesson_result.get("matches"):
-        # Feed lesson context into Claude's analysis
-        emit(f"  Lesson found for '{issue_type}': {lesson_result['matches'][0]['lesson']}")
-```
-
-These lessons inform your reasoning in Step 2. For example, if a lesson says
-"splitting files 3+ hops from trunk made things worse," factor that into your
-severity assessment for `too_large` issues on deeply nested files.
-
 ## Step 2: Claude Analyzes the Map
 
 Read the knowledge map and reason about the project's organization.
@@ -142,8 +118,17 @@ high = analysis["by_severity"]["high"]
 medium = analysis["by_severity"]["medium"]
 low = analysis["by_severity"]["low"]
 
-emit(f"Phase 2/5: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
+emit(f"Phase 4/7: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
 ```
+
+## Step 6: Save Checkpoint
+
+```
+write_file(".neuraltree/analysis.json", json.dumps(analysis, indent=2))
+emit("Checkpoint saved: .neuraltree/analysis.json")
+```
+
+**If resuming:** Check for `.neuraltree/analysis.json`. If < 1 hour old, LOAD it.
 
 **If no issues found:** Skip to Verify.
 **If issues found:** Proceed to Plan (read `sections/plan.md`).

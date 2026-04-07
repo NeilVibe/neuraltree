@@ -27,5 +27,5 @@ NeuralTree's reorganization pipeline operates in an isolated git worktree (sandb
 ## Related
 
 - [User Approves Destructive Actions](user-approves-destructive.md)
-- [Explore First Pipeline](explore-first-pipeline.md) — sandbox is used in the Execute phase
+- [Index-First Pipeline](index-first-pipeline.md) — sandbox is used in the Execute phase
 - [Autoloop](autoloop.md) — autoloop runs entirely within sandbox

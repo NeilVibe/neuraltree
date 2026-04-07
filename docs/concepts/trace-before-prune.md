@@ -30,4 +30,4 @@ Deleting without tracing causes silent breakage.
 
 - [Sandbox First](sandbox-first.md) — test deletions in sandbox before applying
 - [User Approves Destructive Actions](user-approves-destructive.md) — user confirms all deletions
-- [Explore First Pipeline](explore-first-pipeline.md) — tracing happens in the Analyze phase
+- [Index-First Pipeline](index-first-pipeline.md) — tracing happens in the Plan phase
