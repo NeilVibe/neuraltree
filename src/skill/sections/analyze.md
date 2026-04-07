@@ -118,7 +118,7 @@ high = analysis["by_severity"]["high"]
 medium = analysis["by_severity"]["medium"]
 low = analysis["by_severity"]["low"]
 
-emit(f"Phase 4/7: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
+emit(f"Phase 5/8: Analysis complete — {len(all_issues)} issues ({high} high, {medium} medium, {low} low)")
 ```
 
 ## Step 6: Save Checkpoint

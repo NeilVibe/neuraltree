@@ -8,13 +8,13 @@
 
 ## Current Status
 
-**COMPLETE.** 24 MCP tools (416 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 26 MCP tools (416+ tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
-Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — index-first orchestration (v3)
-MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 416 tests
+Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — index-first orchestration (v3.1, wiki-compile)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 26 tools, 416+ tests
 Viking MCP = THE MEMORY — semantic search + full batch indexing
 Agent Swarm = THE EYES — targeted explorers (problem areas only at scale)
 Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
@@ -26,17 +26,18 @@ Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
 Phase 1: INDEX     — Viking batch index ALL files, wiki_lint, score, diagnose, find_dead, precision
 Phase 2: EXPLORE   — targeted agents on problem areas only (scale-aware: full / targeted / sampled)
 Phase 3: MAP       — build knowledge map from index data + explorer reports
-Phase 4: ANALYZE   — Claude reasons about what's wrong (no formulas)
-Phase 5: PLAN      — propose reorganization, user approves
-Phase 6: EXECUTE   — apply in sandbox
-Phase 7: VERIFY    — re-score + wiki_lint confirms improvement
+Phase 4: COMPILE   — Karpathy LLM-Wiki: compile raw sources into persistent wiki pages
+Phase 5: ANALYZE   — Claude reasons about what's wrong (no formulas)
+Phase 6: PLAN      — propose reorganization, user approves
+Phase 7: EXECUTE   — apply in sandbox
+Phase 8: VERIFY    — re-score + wiki_lint confirms improvement
 ```
 
 **v3 vs v2:** Index-first means ALL 24 tools get used. At scale (300+ files),
 agents only explore problem areas instead of blanket-reading everything.
 Viking is batch-indexed upfront, not skipped.
 
-## MCP Server — 24 Tools
+## MCP Server — 26 Tools
 
 | Category | Tools |
 |----------|-------|
@@ -47,7 +48,7 @@ Viking is batch-indexed upfront, not skipped.
 | Lessons | lesson_match, lesson_add |
 | Scoring | score, diagnose |
 | Semantic | precision (Viking search + content retrieval), viking_index (batch indexing) |
-| Wiki | wiki_lint (broken links, orphans, freshness, cross-ref density) |
+| Wiki | wiki_lint, compile (write wiki pages), wiki_read (read wiki state) |
 | Sandbox | sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy |
 
 ## Project Structure
@@ -61,24 +62,25 @@ neuraltree/
 │   │   ├── server.py            Entry point — registers all 24 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
-│   │   ├── tools/               8 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize/, wiki_lint)
+│   │   ├── tools/               9 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize/, wiki_lint, compile)
 │   │   │   └── reorganize/      Package: 6 tool files + _helpers.py (was 809-line monolith)
 │   │   ├── scoring/             2 modules (score, diagnose)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
-│       ├── SKILL.md             The skill router (v3, index-first)
-│       └── sections/            7 phase files + report
+│       ├── SKILL.md             The skill router (v3.1, index-first + wiki-compile)
+│       └── sections/            8 phase files + report
 │           ├── index.md         Phase 1: full indexing (Viking + wiki_lint + score + diagnose)
 │           ├── explore.md       Phase 2: targeted agent exploration (scale-aware)
 │           ├── map.md           Phase 3: knowledge map synthesis
-│           ├── analyze.md       Phase 4: Claude-driven analysis
-│           ├── plan.md          Phase 5: reorganization proposals
-│           ├── execute.md       Phase 6: sandbox execution
-│           ├── verify.md        Phase 7: adaptive scoring + wiki lint
+│           ├── compile.md       Phase 4: wiki compilation (Karpathy LLM-Wiki)
+│           ├── analyze.md       Phase 5: Claude-driven analysis
+│           ├── plan.md          Phase 6: reorganization proposals
+│           ├── execute.md       Phase 7: sandbox execution
+│           ├── verify.md        Phase 8: adaptive scoring + wiki lint
 │           └── report.md        Output: before/after comparison
-├── tests/                       416 tests passing
+├── tests/                       416+ tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
-│   ├── unit/                    12 test files
+│   ├── unit/                    13 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
 ├── lessons/                     Design lessons (autoloop, v2 decisions)
 ├── docs/
@@ -126,10 +128,10 @@ See [concept index](docs/concepts/_INDEX.md) for deep-dive pages on each princip
 ## Commands
 
 ```bash
-# Run tests (426 passing)
+# Run tests
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
-# Verify all 24 tools load
+# Verify all 26 tools load
 PYTHONPATH=src python3.11 -c "
 import asyncio
 from neuraltree_mcp.server import mcp

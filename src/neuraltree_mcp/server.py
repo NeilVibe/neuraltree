@@ -1,6 +1,6 @@
 """NeuralTree MCP Server — The Muscle.
 
-24 tools for neural tree organization:
+26 tools for neural tree organization:
   Filesystem: scan, trace, backup, restore
   Intelligence: wire, generate_queries
   Knowledge Map: neuraltree_knowledge_map (save/load/query)
@@ -8,7 +8,7 @@
   Lessons: lesson_match, lesson_add
   Scoring: score, diagnose
   Semantic: precision (Viking search + LLM judge), viking_index (batch indexing)
-  Wiki: wiki_lint (broken links, orphans, freshness, cross-ref density)
+  Wiki: wiki_lint, compile (write wiki pages), wiki_read (read wiki state)
   Sandbox: sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 """
 from fastmcp import FastMCP
@@ -32,6 +32,7 @@ from neuraltree_mcp.tools.precision import register as register_precision
 from neuraltree_mcp.tools.viking_index import register as register_viking_index
 from neuraltree_mcp.tools.knowledge_map import register as register_knowledge_map
 from neuraltree_mcp.tools.wiki_lint import register as register_wiki_lint
+from neuraltree_mcp.tools.compile import register as register_compile
 
 register_scan(mcp)
 register_trace(mcp)
@@ -47,6 +48,7 @@ register_precision(mcp)
 register_viking_index(mcp)
 register_knowledge_map(mcp)
 register_wiki_lint(mcp)
+register_compile(mcp)
 
 
 if __name__ == "__main__":

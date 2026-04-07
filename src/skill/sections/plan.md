@@ -94,7 +94,7 @@ for action in needs_approval:
         rejected += 1
         action["status"] = "rejected"
 
-emit(f"Phase 5/7: {len(approved_actions)} actions approved, {rejected} rejected")
+emit(f"Phase 6/8: {len(approved_actions)} actions approved, {rejected} rejected")
 ```
 
 **Proceed to Execute (read `sections/execute.md`).**

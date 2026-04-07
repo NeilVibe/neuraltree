@@ -182,7 +182,7 @@ for issue in diagnose_result.get("issues", []):
         problem_dirs.add(os.path.dirname(f) or ".")
 
 emit(f"""
-Phase 1/7: Index Complete
+Phase 1/8: Index Complete
   Viking indexed: {index_results['viking_indexed']} files
   Wiki health:    {lint_result.get('health_score', '?')}
   Flow score:     {score_result.get('flow_score_partial', '?')}

@@ -44,10 +44,10 @@ class TestServerLoads:
         assert len(tools) >= len(expected)
 
     def test_tool_count(self):
-        """Should have exactly 24 tools."""
+        """Should have exactly 26 tools."""
         from neuraltree_mcp.server import mcp
         tools = asyncio.run(mcp.list_tools())
-        assert len(tools) == 24
+        assert len(tools) == 26
 
 
 class TestToolSchemas:

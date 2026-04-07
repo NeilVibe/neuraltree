@@ -69,7 +69,7 @@ for issue in index_results["diagnose"].get("issues", []):
 
 ```
 stats = result["stats"]
-emit(f"Phase 3/7: Knowledge map built — {stats['total_files']} files, "
+emit(f"Phase 3/8: Knowledge map built — {stats['total_files']} files, "
      f"{stats['total_edges']} edges, {stats['total_clusters']} clusters, "
      f"{stats['total_issues']} issues")
 ```
@@ -85,4 +85,4 @@ emit(f"Phase 3/7: Knowledge map built — {stats['total_files']} files, "
 | Orphans | Files with zero edges (not in any edge source or target) | severity: high |
 | Scattered clusters | Clusters spanning 3+ directories | severity: medium |
 
-**Proceed to Analyze (read `sections/analyze.md`).**
+**Proceed to Compile (read `sections/compile.md`).**

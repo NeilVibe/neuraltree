@@ -5,7 +5,7 @@ description: >
   knowledge so any fact is reachable in 0-2 hops.
 version: 3.0.0
 tools_required:
-  - neuraltree-mcp (24 tools — includes Viking search + knowledge map)
+  - neuraltree-mcp (26 tools — includes Viking search + knowledge map + wiki compile)
 ---
 
 # /neuraltree — Universal Neural Organization Skill v3
@@ -22,10 +22,11 @@ SKILL.md (this file)        — always loaded: activation + principles + routing
 sections/index.md           — Phase 1: FULL indexing (Viking + wiki_lint + score + diagnose)
 sections/explore.md         — Phase 2: targeted agent exploration (problem areas only)
 sections/map.md             — Phase 3: knowledge map synthesis
-sections/analyze.md         — Phase 4: Claude-driven issue analysis
-sections/plan.md            — Phase 5: reorganization proposals
-sections/execute.md         — Phase 6: sandbox execution
-sections/verify.md          — Phase 7: adaptive scoring verification
+sections/compile.md         — Phase 4: wiki compilation (Karpathy LLM-Wiki pattern)
+sections/analyze.md         — Phase 5: Claude-driven issue analysis
+sections/plan.md            — Phase 6: reorganization proposals
+sections/execute.md         — Phase 7: sandbox execution
+sections/verify.md          — Phase 8: adaptive scoring verification
 sections/report.md          — Output: before/after comparison
 ```
 
@@ -66,7 +67,7 @@ These are operations you perform directly (not MCP tools). Use your native capab
 
 ---
 
-## MCP Tools Reference (24 tools)
+## MCP Tools Reference (26 tools)
 
 | Category | Tools |
 |----------|-------|
@@ -77,10 +78,10 @@ These are operations you perform directly (not MCP tools). Use your native capab
 | Scoring | `neuraltree_score` (with adaptive mode), `neuraltree_diagnose` |
 | Semantic | `neuraltree_precision`, `neuraltree_viking_index` |
 | Knowledge Map | `neuraltree_knowledge_map` (save/load/query/build) |
-| Wiki | `neuraltree_wiki_lint` (broken links, orphans, freshness, cross-ref density) |
+| Wiki | `neuraltree_wiki_lint`, `neuraltree_compile`, `neuraltree_wiki_read` |
 | Sandbox | `neuraltree_sandbox_create`, `neuraltree_sandbox_diff`, `neuraltree_sandbox_apply`, `neuraltree_sandbox_destroy` |
 
-**All 24 tools are used in the pipeline. None are optional.**
+**All 26 tools are used in the pipeline. None are optional.**
 
 ---
 
@@ -127,9 +128,9 @@ Read `.neuraltree/knowledge_map.json` and `.neuraltree/state.json`.
 
 | Condition | Mode | Pipeline |
 |-----------|------|----------|
-| No knowledge map | **full** | Index → Explore → Map → Analyze → Plan → Execute → Verify |
-| Map exists, stale (>7 days) | **refresh** | Index → Explore → Map → Analyze → Plan → Execute → Verify |
-| Map exists, recent, score < 0.60 | **fix** | Index → Analyze → Plan → Execute → Verify |
+| No knowledge map | **full** | Index → Explore → Map → Compile → Analyze → Plan → Execute → Verify |
+| Map exists, stale (>7 days) | **refresh** | Index → Explore → Map → Compile → Analyze → Plan → Execute → Verify |
+| Map exists, recent, score < 0.60 | **fix** | Index → Compile → Analyze → Plan → Execute → Verify |
 | Map exists, recent, score >= 0.60 | **check** | Verify only (quick re-score + wiki_lint) |
 
 ### Step 3: Determine Agent Count
@@ -205,26 +206,34 @@ Synthesize explorer reports + Index semantic edges into dual-layer knowledge map
 Layer 1: file graph (nodes + edges). Layer 2: concept clusters.
 Save to `.neuraltree/knowledge_map.json`.
 
-### Phase 4: Analyze
+### Phase 4: Compile
+**Read `sections/compile.md` and execute all steps.**
+Karpathy LLM-Wiki pattern: compile raw sources into structured, interlinked
+wiki pages in `.neuraltree/wiki/`. Each concept cluster becomes a wiki page.
+The wiki is a persistent, compounding artifact — knowledge compiled once,
+kept current, never re-derived.
+*Uses neuraltree_compile + neuraltree_wiki_read tools.*
+
+### Phase 5: Analyze
 **Read `sections/analyze.md` and execute all steps.**
 Claude reads the knowledge map and REASONS about what's wrong.
 No formulas — understanding-driven issue identification.
 Output: issues list with severity + proposed fixes.
 *Skip if no issues found in map.*
 
-### Phase 5: Plan
+### Phase 6: Plan
 **Read `sections/plan.md` and execute all steps.**
 Convert issues into concrete actions. Trace before destructive changes.
 Show user: "Here's what I'd change and why." User approves per-item.
 *Skip if no issues.*
 
-### Phase 6: Execute
+### Phase 7: Execute
 **Read `sections/execute.md` and execute all steps.**
 Apply approved changes in sandbox. Wire new/moved files. Re-index Viking.
 Verify no broken references.
 *Skip if no approved actions.*
 
-### Phase 7: Verify
+### Phase 8: Verify
 **Read `sections/verify.md` and execute all steps.**
 Score with adaptive mode. Compare before/after.
 Score VALIDATES the changes — it doesn't drive them.

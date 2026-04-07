@@ -122,7 +122,7 @@ else:
 Same greedy slicing algorithm as FULL, but on `target_files` only.
 
 ```
-emit(f"Phase 2/7: Targeted exploration — {len(target_files)} files "
+emit(f"Phase 2/8: Targeted exploration — {len(target_files)} files "
      f"(out of {len(knowledge_files)}) with {explore_agent_count} agents")
 ```
 
@@ -193,7 +193,7 @@ total_files_explored = sum(len(r.get("files", [])) for r in explorer_reports)
 total_issues_found = sum(
     len(f.get("issues", [])) for r in explorer_reports for f in r.get("files", [])
 )
-emit(f"Phase 2/7: Explored {total_files_explored} files with "
+emit(f"Phase 2/8: Explored {total_files_explored} files with "
      f"{explore_agent_count} agents. {total_issues_found} issues found.")
 ```
 
