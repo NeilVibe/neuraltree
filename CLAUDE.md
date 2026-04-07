@@ -8,27 +8,33 @@
 
 ## Current Status
 
-**COMPLETE.** 24 MCP tools (426 tests) + SKILL.md + install.sh + README.
+**COMPLETE.** 24 MCP tools (414 tests) + SKILL.md + install.sh + README.
 
 ## Architecture
 
 ```
-Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — explore-first orchestration
-MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 426 tests
-Viking MCP = THE MEMORY — semantic search
-Agent Swarm = THE EYES — 2-10 parallel explorers
+Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — index-first orchestration (v3)
+MCP Server (neuraltree-mcp) = THE MUSCLE — 24 tools, 414 tests
+Viking MCP = THE MEMORY — semantic search + full batch indexing
+Agent Swarm = THE EYES — targeted explorers (problem areas only at scale)
 Claude = THE JUDGE — reasoning-based analysis (no hardcoded formulas)
 ```
 
-## Pipeline (v2)
+## Pipeline (v3 — index-first)
 
 ```
-Phase 1: UNDERSTAND — N agents read project deeply in parallel, synthesize knowledge map
-Phase 2: ANALYZE   — Check lessons, Claude reasons about what's wrong
-Phase 3: PLAN      — propose reorganization, user approves
-Phase 4: EXECUTE   — apply in sandbox
-Phase 5: VERIFY    — wiki lint + universal organization scoring confirms improvement
+Phase 1: INDEX     — Viking batch index ALL files, wiki_lint, score, diagnose, find_dead, precision
+Phase 2: EXPLORE   — targeted agents on problem areas only (scale-aware: full / targeted / sampled)
+Phase 3: MAP       — build knowledge map from index data + explorer reports
+Phase 4: ANALYZE   — Claude reasons about what's wrong (no formulas)
+Phase 5: PLAN      — propose reorganization, user approves
+Phase 6: EXECUTE   — apply in sandbox
+Phase 7: VERIFY    — re-score + wiki_lint confirms improvement
 ```
+
+**v3 vs v2:** Index-first means ALL 24 tools get used. At scale (300+ files),
+agents only explore problem areas instead of blanket-reading everything.
+Viking is batch-indexed upfront, not skipped.
 
 ## MCP Server — 24 Tools
 
@@ -60,15 +66,17 @@ neuraltree/
 │   │   ├── scoring/             2 modules (score, diagnose)
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
-│       ├── SKILL.md             The skill router (v2, explore-first)
-│       └── sections/            6 phase files
-│           ├── understand.md    Phase 1: explore + map
-│           ├── analyze.md       Phase 2: Claude-driven analysis
-│           ├── plan.md          Phase 3: reorganization proposals
-│           ├── execute.md       Phase 4: sandbox execution
-│           ├── verify.md        Phase 5: adaptive scoring + wiki lint
+│       ├── SKILL.md             The skill router (v3, index-first)
+│       └── sections/            7 phase files + report
+│           ├── index.md         Phase 1: full indexing (Viking + wiki_lint + score + diagnose)
+│           ├── explore.md       Phase 2: targeted agent exploration (scale-aware)
+│           ├── map.md           Phase 3: knowledge map synthesis
+│           ├── analyze.md       Phase 4: Claude-driven analysis
+│           ├── plan.md          Phase 5: reorganization proposals
+│           ├── execute.md       Phase 6: sandbox execution
+│           ├── verify.md        Phase 7: adaptive scoring + wiki lint
 │           └── report.md        Output: before/after comparison
-├── tests/                       426 tests passing
+├── tests/                       414 tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    12 test files
 │   └── integration/             5 test files (e2e pipeline, sandbox, degraded, plus originals)
