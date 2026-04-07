@@ -5,7 +5,7 @@ description: >
   knowledge so any fact is reachable in 0-2 hops.
 version: 2.0.0
 tools_required:
-  - neuraltree-mcp (25 tools — includes Viking search + knowledge map)
+  - neuraltree-mcp (24 tools — includes Viking search + knowledge map)
 ---
 
 # /neuraltree — Universal Neural Organization Skill v2
@@ -60,7 +60,7 @@ These are operations you perform directly (not MCP tools). Use your native capab
 
 ---
 
-## MCP Tools Reference (25 tools)
+## MCP Tools Reference (24 tools)
 
 | Category | Tools |
 |----------|-------|
@@ -68,7 +68,7 @@ These are operations you perform directly (not MCP tools). Use your native capab
 | Intelligence | `neuraltree_wire`, `neuraltree_generate_queries` |
 | Reorganize | `neuraltree_plan_move`, `neuraltree_plan_split`, `neuraltree_find_dead`, `neuraltree_generate_index`, `neuraltree_shrink_and_wire`, `neuraltree_split_and_wire` |
 | Lessons | `neuraltree_lesson_match`, `neuraltree_lesson_add` |
-| Scoring | `neuraltree_score` (with adaptive mode), `neuraltree_diagnose`, `neuraltree_predict`, `neuraltree_update_calibration` |
+| Scoring | `neuraltree_score` (with adaptive mode), `neuraltree_diagnose` |
 | Semantic | `neuraltree_precision`, `neuraltree_viking_index` |
 | Knowledge Map | `neuraltree_knowledge_map` (save/load/query) |
 | Sandbox | `neuraltree_sandbox_create`, `neuraltree_sandbox_diff`, `neuraltree_sandbox_apply`, `neuraltree_sandbox_destroy` |
@@ -150,7 +150,7 @@ Lock file: `.neuraltree/.lock` (contains ISO 8601 timestamp).
 ```
 /neuraltree — Activation Complete
 Mode: {mode} | Agents: {agent_count} | Files: {total_kb_files}
-Tools: neuraltree-mcp ✓ (25 tools) | Viking: ✓|DEGRADED
+Tools: neuraltree-mcp ✓ (24 tools) | Viking: ✓|DEGRADED
 Pipeline: {phase_list}
 ```
 
