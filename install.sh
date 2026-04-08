@@ -34,7 +34,7 @@ CLAUDE_JSON="${HOME}/.claude.json"
 # ─── Header ──────────────────────────────────────────────────────────
 printf "\n${BOLD}"
 printf "  ╔═══════════════════════════════════════╗\n"
-printf "  ║       NeuralTree Installer v0.1.0     ║\n"
+printf "  ║       NeuralTree Installer v3.2.0     ║\n"
 printf "  ╚═══════════════════════════════════════╝\n"
 printf "${RESET}\n"
 
@@ -203,7 +203,7 @@ print(len(tools))
 if [[ "$TOOL_COUNT" -eq 25 ]]; then
     ok "All 25 MCP tools loaded successfully"
 else
-    warn "Expected 25 tools but got ${TOOL_COUNT}. The server may still work — check manually."
+    warn "Expected 26 tools but got ${TOOL_COUNT}. The server may still work — check manually."
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────
@@ -221,8 +221,7 @@ printf "\n"
 printf "  ${BOLD}Next steps:${RESET}\n"
 printf "    1. Start (or restart) Claude Code\n"
 printf "    2. Make sure Viking MCP is running for full scoring\n"
-printf "    3. Make sure Ollama is running with Qwen3.5: ${YELLOW}ollama pull qwen3:latest${RESET}\n"
-printf "    4. Run: ${GREEN}/neuraltree${RESET}\n"
+printf "    3. Run: ${GREEN}/neuraltree${RESET}\n"
 printf "\n"
 printf "  ${BOLD}Verify anytime:${RESET} ./install.sh --check\n"
 printf "\n"

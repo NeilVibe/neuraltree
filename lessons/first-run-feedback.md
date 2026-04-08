@@ -58,6 +58,24 @@ last_verified: 2026-04-08
 - **Key file:** `sections/index.md`
 - **Commit:** 6f1a94dafc60
 
+
+## All Python scripts crash with 'No module named pandas_ta' when run from system Python 3.10 (2026-04-08)
+- **Symptom:** All Python scripts crash with 'No module named pandas_ta' when run from system Python 3.10
+- **Root cause:** Project requires conda env 'newfin_env' which has pandas_ta, fintest_oop, and all deps. System Python 3.10 is missing them. pandas_ta only ships for Python 3.12+ on PyPI — it's installed from source in the conda env.
+- **Chain:** tmux new-session → python3 (system) → import pandas_ta → crash. Fix: tmux new-session → conda activate newfin_env → python → works.
+- **Fix:** KEEP: Always prefix tmux commands with: eval "$(conda shell.bash hook)" && conda activate newfin_env && python script.py. Save this as a memory entry so future sessions don't waste 30 minutes debugging import errors.
+- **Key file:** `autorsi_unified.py`
+- **Commit:** f2419f7a0806
+
+
+## Tried to make pandas_ta import lazy/optional in 3 files, then had to revert all 3 changes (2026-04-08)
+- **Symptom:** Tried to make pandas_ta import lazy/optional in 3 files, then had to revert all 3 changes
+- **Root cause:** Root cause was wrong — the dependency isn't missing, the conda env just wasn't activated. Making imports lazy would have hidden real errors and changed behavior (bearish pattern detection silently disabled). Always check the environment before modifying import semantics.
+- **Chain:** import fails → wrong instinct: make import lazy → 3 files modified → still crashes deeper → discover conda env → revert all 3 → activate conda → works. Should have been: import fails → check env → activate conda → done.
+- **Fix:** KEEP: When imports fail, check conda/venv FIRST before making imports optional. Ask user about their environment. Don't assume system Python is the right interpreter. Lazy imports are a last resort, not a first fix.
+- **Key file:** `autorsi_noML.py`
+- **Commit:** f2419f7a0806
+
 ## Docs
 - `src/neuraltree/tools/wiki_lint.py` — implementation target
 - `src/neuraltree/tools/viking_index.py` — implementation target
@@ -65,3 +83,5 @@ last_verified: 2026-04-08
 - `src/neuraltree/tools/score.py` — implementation target
 - `src/neuraltree/tools/diagnose.py` — implementation target
 - `sections/index.md` — implementation target
+- `autorsi_unified.py` — implementation target
+- `autorsi_noML.py` — implementation target

@@ -8,3 +8,4 @@ last_verified: 2026-04-05
 - [First-Run-Feedback](first-run-feedback.md) — first-run-feedback lessons
 - [Knowledge-Map](knowledge-map.md) — knowledge-map lessons
 - [Wiki-Lint](wiki-lint.md) — wiki-lint lessons
+- [Skill-Pseudocode](skill-pseudocode.md) — skill-pseudocode lessons

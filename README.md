@@ -17,7 +17,7 @@ NeuralTree transforms any project into a structured information system where any
 ├──────────────┬──────────────┬──────────────┬────────────┤
 │ neuraltree   │ Viking MCP   │ Agent Swarm  │ Claude     │
 │ THE MUSCLE   │ THE MEMORY   │ THE EYES     │ THE JUDGE  │
-│ 24 tools     │ Semantic     │ 2-10 parallel│ Reasoning  │
+│ 26 tools     │ Semantic     │ 2-10 parallel│ Reasoning  │
 │ scan, score, │ search all   │ explorers    │ analysis   │
 │ wire, map,   │ indexed      │ read project │ (no hard-  │
 │ sandbox...   │ content      │ deeply       │ coded math)│
@@ -66,9 +66,9 @@ That's it. NeuralTree detects it's a first run (full mode), launches parallel ex
 
 ---
 
-## MCP Tools (24)
+## MCP Tools (26)
 
-NeuralTree's MCP server provides 24 tools across 8 categories:
+NeuralTree's MCP server provides 26 tools across 9 categories:
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -91,6 +91,9 @@ NeuralTree's MCP server provides 24 tools across 8 categories:
 | **Semantic** | `neuraltree_precision` | Search Viking + retrieve content — Claude judges relevance externally |
 | | `neuraltree_viking_index` | Batch-index local files into Viking semantic search |
 | **Knowledge Map** | `neuraltree_knowledge_map` | Generate a structured map of project knowledge topology |
+| **Wiki** | `neuraltree_wiki_lint` | Lint wiki for broken links, orphans, staleness, cross-ref density |
+| | `neuraltree_compile` | Compile raw sources into structured wiki pages (Karpathy LLM-Wiki) |
+| | `neuraltree_wiki_read` | Read current wiki state and page index |
 | **Sandbox** | `neuraltree_sandbox_create` | Create isolated git worktree for safe experimentation |
 | | `neuraltree_sandbox_diff` | Compare sandbox changes against original |
 | | `neuraltree_sandbox_apply` | Promote sandbox changes to the real project |
@@ -130,7 +133,8 @@ The Flow Score is a single number (0.0-1.0) that tells you whether information i
 | `/neuraltree fix` | Index → Analyze → Plan → Execute → Verify | Jump straight to fixing — requires existing knowledge map. |
 | `/neuraltree verify` | Verify only | Quick re-score with wiki lint. |
 | `/neuraltree map` | Show map | Display knowledge map summary (concept clusters, file graph). |
-| `/neuraltree auto` | Full pipeline | Index → Explore → Map → Analyze → Plan → Execute → Verify. Always runs everything. |
+| `/neuraltree auto` | Full pipeline | Index → Explore → Map → Compile → Analyze → Plan → Execute → Verify. Always runs everything. |
+| `/neuraltree learn` | Learn chain | Record a lesson → compile wiki if 3+ in domain → Viking index → verify retrieval. |
 
 ---
 
@@ -143,17 +147,18 @@ The Flow Score is a single number (0.0-1.0) that tells you whether information i
 2. INDEX       Viking batch index, wiki_lint, score, diagnose, find_dead, precision queries
 3. EXPLORE     Targeted agents on problem areas only (scale-aware: full / targeted / sampled)
 4. MAP         Build knowledge map from index data + explorer reports
-5. ANALYZE     Check past lessons, Claude reads the map and REASONS about what's wrong
-6. PLAN        Propose concrete reorganization actions — user approves per-item
-7. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
-8. VERIFY      Wiki lint + scoring confirms improvement
+5. COMPILE     Karpathy LLM-Wiki: compile raw sources into persistent wiki pages
+6. ANALYZE     Check past lessons, Claude reads the map and REASONS about what's wrong
+7. PLAN        Propose concrete reorganization actions — user approves per-item
+8. EXECUTE     Apply approved changes in sandbox, wire new/moved files, re-index Viking
+9. VERIFY      Wiki lint + scoring confirms improvement
 ```
 
 ### Index-First vs Explore-First
 
 v2 explored everything, then scored. v3 **indexes first**:
 
-- **All 24 tools run upfront** — quantitative health picture in seconds
+- **All 26 tools run upfront** — quantitative health picture in seconds
 - **Targeted exploration** — agents only read problem areas, not everything
 - **Scale-aware** — full (<300 files), targeted (300-2000), sampled (2000+)
 - **Checkpoints** — each phase saves JSON to `.neuraltree/` for session recovery
@@ -227,7 +232,7 @@ NeuralTree automatically detects the right mode based on your project's state:
 ### Run tests
 
 ```bash
-# Full test suite (399 tests)
+# Full test suite (439 tests)
 PYTHONPATH=src python3.11 -m pytest tests/ -v
 
 # Quick smoke test
@@ -257,18 +262,18 @@ PYTHONPATH=src python3.11 -m neuraltree_mcp.server
 neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
-│   │   ├── server.py            Entry point — registers all 24 tools
+│   │   ├── server.py            Entry point — registers all 26 tools
 │   │   ├── validation.py        Path traversal prevention
 │   │   ├── text_utils.py        Shared utilities
 │   │   ├── tools/               scan, trace, backup, wire, generate_queries, lesson, reorganize, knowledge_map, precision, viking_index
 │   │   ├── scoring/             score, diagnose
 │   │   └── sandbox/             sandbox_create, sandbox_diff, sandbox_apply, sandbox_destroy
 │   └── skill/
-│       ├── SKILL.md             Skill router (v3, index-first)
-│       └── sections/            7 phase files + report (index, explore, map, analyze, plan, execute, verify)
+│       ├── SKILL.md             Skill router (v3.2, index-first + wiki-compile + learn)
+│       └── sections/            8 phase files + report + learn
 ├── tests/
-│   ├── unit/                    11 test files
-│   └── integration/             5 test files (end-to-end via mcp.call_tool())
+│   ├── unit/                    13 test files
+│   └── integration/             6 test files (end-to-end via mcp.call_tool())
 ├── install.sh                   One-command installer
 ├── pyproject.toml               Package configuration
 └── requirements.txt             Python dependencies

@@ -3,7 +3,7 @@ name: neuraltree
 description: >
   Universal neural organization — explores, maps, and reorganizes project
   knowledge so any fact is reachable in 0-2 hops.
-version: 3.0.0
+version: 3.2.0
 tools_required:
   - neuraltree-mcp (26 tools — includes Viking search + knowledge map + wiki compile)
 ---
