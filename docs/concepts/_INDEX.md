@@ -21,3 +21,7 @@
 
 - [Autoloop](autoloop.md) — Autonomous improvement loop with KEEP/HOLD/DISCARD decisions
 - [User Approves Destructive Actions](user-approves-destructive.md) — Autoloop thinks, user decides on deletes/moves
+
+## Reference
+
+- [Karpathy LLM-Wiki](../reference/KARPATHY_LLM_WIKI.md) — The compile pattern: ingest, query, lint (inspiration for Phase 4)
