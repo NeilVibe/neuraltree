@@ -33,7 +33,7 @@ Phase 7: EXECUTE   — apply in sandbox
 Phase 8: VERIFY    — re-score + wiki_lint confirms improvement
 ```
 
-**v3 vs v2:** Index-first means ALL 24 tools get used. At scale (300+ files),
+**v3 vs v2:** Index-first means ALL 26 tools get used. At scale (300+ files),
 agents only explore problem areas instead of blanket-reading everything.
 Viking is batch-indexed upfront, not skipped.
 
@@ -59,7 +59,7 @@ neuraltree/
 ├── src/
 │   ├── neuraltree_mcp/          Python MCP server (FastMCP)
 │   │   ├── __init__.py          Version 0.1.0
-│   │   ├── server.py            Entry point — registers all 24 tools
+│   │   ├── server.py            Entry point — registers all 26 tools
 │   │   ├── validation.py        Path traversal prevention (all tools use this)
 │   │   ├── text_utils.py        Shared: extract_keywords, jaccard, walk_project_files
 │   │   ├── tools/               9 tool modules (scan, trace, backup, wire, generate_queries, lesson, reorganize/, wiki_lint, compile)

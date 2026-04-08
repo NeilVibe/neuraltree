@@ -42,7 +42,7 @@ sections/learn.md           — Standalone: record lesson → compile → index 
 | Explore everything, then score | Index + score + lint FIRST, then explore problems |
 | 10 agents read 128 files each (too shallow) | Targeted agents on problem areas only (deep) |
 | Viking skipped at scale (too many queries) | Viking batch-indexed upfront, queries batched |
-| 14 of 24 tools unused | ALL 24 tools used in pipeline |
+| 14 of 26 tools unused | ALL 26 tools used in pipeline |
 | Explorer reports = prose (lost in translation) | Index data = structured (feeds map directly) |
 | Same pipeline for 30 and 3000 files | Scale-aware: full / targeted / sampled |
 
@@ -195,7 +195,7 @@ Lock file: `.neuraltree/.lock` (contains ISO 8601 timestamp).
 ```
 /neuraltree — Activation Complete
 Mode: {mode} | Max Agents: {agent_count} | Files: {total_kb_files}
-Tools: neuraltree-mcp ✓ (24 tools) | Viking: ✓|DEGRADED
+Tools: neuraltree-mcp ✓ (26 tools) | Viking: ✓|DEGRADED
 Pipeline: {phase_list}
 ```
 
