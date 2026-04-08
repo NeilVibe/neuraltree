@@ -1,0 +1,17 @@
+{
+  "name": "neuraltree-mcp",
+  "version": "3.2.0",
+  "description": "Universal neural organization for AI coding agents — explores, maps, and reorganizes project knowledge",
+  "bin": {
+    "neuraltree": "./bin/install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeilVibe/neuraltree.git"
+  },
+  "keywords": ["claude-code", "mcp", "knowledge-management", "neuraltree"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

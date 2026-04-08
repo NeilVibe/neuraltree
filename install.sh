@@ -119,21 +119,23 @@ $PYTHON_CMD -m pip install -r "$REQUIREMENTS" --quiet 2>&1 | tail -5 || fail "pi
 
 ok "Dependencies installed"
 
-# ─── Step 4: Copy skill files to Claude skills directory ─────────────
-info "Installing skill to ${SKILL_DEST_DIR}..."
+# ─── Step 4: Symlink skill to Claude skills directory ────────────────
+info "Linking skill to ${SKILL_DEST_DIR}..."
 
-mkdir -p "$SKILL_DEST_DIR"
-cp "$SKILL_SRC" "$SKILL_DEST"
+SKILL_SRC_DIR="${SCRIPT_DIR}/src/skill"
 
-# Copy section files (skill router reads these on demand)
-SECTIONS_SRC="${SCRIPT_DIR}/src/skill/sections"
-SECTIONS_DEST="${SKILL_DEST_DIR}/sections"
-if [[ -d "$SECTIONS_SRC" ]]; then
-    mkdir -p "$SECTIONS_DEST"
-    cp "$SECTIONS_SRC"/*.md "$SECTIONS_DEST/"
-    ok "Skill installed ($(wc -l < "$SKILL_DEST") lines + $(ls "$SECTIONS_DEST"/*.md | wc -l) section files)"
+# Remove old copy if it exists (migrate to symlink)
+if [[ -d "$SKILL_DEST_DIR" && ! -L "$SKILL_DEST_DIR" ]]; then
+    rm -rf "$SKILL_DEST_DIR"
+    info "Removed old copy (migrating to symlink)"
+fi
+
+# Create symlink (auto-updates when repo changes)
+if [[ -L "$SKILL_DEST_DIR" ]]; then
+    ok "Symlink already exists: $(readlink "$SKILL_DEST_DIR")"
 else
-    ok "Skill installed ($(wc -l < "$SKILL_DEST") lines, no sections found)"
+    ln -s "$SKILL_SRC_DIR" "$SKILL_DEST_DIR"
+    ok "Skill symlinked: ${SKILL_DEST_DIR} -> ${SKILL_SRC_DIR}"
 fi
 
 # ─── Step 5: Register MCP server in ~/.claude.json ───────────────────
