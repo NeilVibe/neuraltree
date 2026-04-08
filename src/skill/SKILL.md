@@ -28,6 +28,7 @@ sections/plan.md            — Phase 6: reorganization proposals
 sections/execute.md         — Phase 7: sandbox execution
 sections/verify.md          — Phase 8: adaptive scoring verification
 sections/report.md          — Output: before/after comparison
+sections/learn.md           — Standalone: record lesson → compile → index → verify
 ```
 
 **At each phase boundary, read the next section file and execute it.**
@@ -180,6 +181,7 @@ Pipeline: {phase_list}
 | `/neuraltree verify` | Verify only (quick re-score + wiki_lint) |
 | `/neuraltree map` | Show knowledge map summary |
 | `/neuraltree auto` | Full pipeline regardless of mode |
+| `/neuraltree learn` | Record a lesson → wiki compile → Viking index → verify retrieval |
 
 ---
 

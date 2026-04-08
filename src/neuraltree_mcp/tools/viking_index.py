@@ -11,6 +11,7 @@ eliminate sequential waiting.
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -34,48 +35,76 @@ def _check_viking(viking_url: str) -> bool:
         return False
 
 
+_MAX_RETRIES = 2
+_RETRY_DELAY = 1.0  # seconds, doubles each retry
+
+
 def _upload_and_index(
     viking_url: str, file_path: str, target_uri: str
 ) -> dict:
-    """Upload a local file to Viking and index it. Returns status dict."""
-    # Step 1: temp upload
-    try:
-        with open(file_path, "rb") as f:
-            r = requests.post(
-                f"{viking_url}/api/v1/resources/temp_upload",
-                files={"file": (os.path.basename(file_path), f)},
-                timeout=_UPLOAD_TIMEOUT,
-            )
-        if r.status_code != 200:
-            return {"status": "error", "error": f"Upload failed: HTTP {r.status_code}"}
-        temp_id = r.json().get("result", {}).get("temp_file_id")
-        if not temp_id:
-            return {"status": "error", "error": "No temp_file_id in upload response"}
-    except (requests.ConnectionError, requests.Timeout, ValueError) as e:
-        return {"status": "error", "error": f"Upload failed: {e}"}
-    except OSError as e:
-        return {"status": "error", "error": f"Cannot read file: {e}"}
+    """Upload a local file to Viking and index it. Returns status dict.
 
-    # Step 2: register resource
-    try:
-        r = requests.post(
-            f"{viking_url}/api/v1/resources",
-            json={
-                "temp_file_id": temp_id,
-                "to": target_uri,
-                "wait": True,
-                "timeout": _INDEX_TIMEOUT,
-            },
-            timeout=_INDEX_TIMEOUT + 10,
-        )
-        if r.status_code != 200:
-            return {"status": "error", "error": f"Index failed: HTTP {r.status_code}"}
-        data = r.json()
-        if data.get("status") == "ok":
-            return {"status": "ok", "uri": target_uri}
-        return {"status": "error", "error": data.get("error", {}).get("message", "Unknown error")}
-    except (requests.ConnectionError, requests.Timeout, ValueError) as e:
-        return {"status": "error", "error": f"Index failed: {e}"}
+    Retries up to _MAX_RETRIES times on HTTP 500 errors with exponential
+    backoff. This handles Viking server overload during parallel batch uploads.
+    """
+    last_error = ""
+    for attempt in range(_MAX_RETRIES + 1):
+        if attempt > 0:
+            time.sleep(_RETRY_DELAY * (2 ** (attempt - 1)))  # exponential backoff
+
+        # Step 1: temp upload
+        try:
+            with open(file_path, "rb") as f:
+                r = requests.post(
+                    f"{viking_url}/api/v1/resources/temp_upload",
+                    files={"file": (os.path.basename(file_path), f)},
+                    timeout=_UPLOAD_TIMEOUT,
+                )
+            if r.status_code >= 500:
+                last_error = f"Upload failed: HTTP {r.status_code}"
+                continue  # retry on server errors
+            if r.status_code != 200:
+                return {"status": "error", "error": f"Upload failed: HTTP {r.status_code}"}
+            temp_id = r.json().get("result", {}).get("temp_file_id")
+            if not temp_id:
+                return {"status": "error", "error": "No temp_file_id in upload response"}
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_error = f"Upload failed: {e}"
+            continue  # retry on connection issues
+        except (ValueError, OSError) as e:
+            return {"status": "error", "error": f"Upload failed: {e}"}
+
+        # Step 2: register resource
+        try:
+            r = requests.post(
+                f"{viking_url}/api/v1/resources",
+                json={
+                    "temp_file_id": temp_id,
+                    "to": target_uri,
+                    "wait": True,
+                    "timeout": _INDEX_TIMEOUT,
+                },
+                timeout=_INDEX_TIMEOUT + 10,
+            )
+            if r.status_code >= 500:
+                last_error = f"Index failed: HTTP {r.status_code}"
+                continue  # retry on server errors
+            if r.status_code != 200:
+                return {"status": "error", "error": f"Index failed: HTTP {r.status_code}"}
+            data = r.json()
+            if data.get("status") == "ok":
+                result = {"status": "ok", "uri": target_uri}
+                if attempt > 0:
+                    result["retries"] = attempt
+                return result
+            return {"status": "error", "error": data.get("error", {}).get("message", "Unknown error")}
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_error = f"Index failed: {e}"
+            continue  # retry on connection issues
+        except ValueError as e:
+            return {"status": "error", "error": f"Index failed: {e}"}
+
+    return {"status": "error", "error": f"{last_error} (after {_MAX_RETRIES + 1} attempts)"}
 
 
 def register(mcp: FastMCP) -> None:

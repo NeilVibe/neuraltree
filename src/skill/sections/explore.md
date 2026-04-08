@@ -64,16 +64,16 @@ Build the target list from Index results:
 target_files = set()
 
 # 1. All orphan files (wiki_lint found no links to them)
-for orphan in index_results["wiki_lint"].get("orphans", []):
-    target_files.add(orphan)
+for orphan in index_results["wiki_lint"].get("orphan_pages", []):
+    target_files.add(orphan["file"])
 
 # 2. All files with broken outgoing links
 for broken in index_results["wiki_lint"].get("broken_links", []):
-    target_files.add(broken["source"])
+    target_files.add(broken["file"])
 
 # 3. All stale files
-for stale in index_results["wiki_lint"].get("stale_files", []):
-    target_files.add(stale["path"] if isinstance(stale, dict) else stale)
+for stale in index_results["wiki_lint"].get("stale_pages", []):
+    target_files.add(stale["file"])
 
 # 4. All dead files (nothing references them at all)
 for dead in index_results["dead_files"].get("dead_files", []):

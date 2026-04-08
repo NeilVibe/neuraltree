@@ -68,7 +68,7 @@ neuraltree/
 │   │   └── sandbox/             1 module (4 sandbox tools)
 │   └── skill/
 │       ├── SKILL.md             The skill router (v3.1, index-first + wiki-compile)
-│       └── sections/            8 phase files + report
+│       └── sections/            8 phase files + report + learn
 │           ├── index.md         Phase 1: full indexing (Viking + wiki_lint + score + diagnose)
 │           ├── explore.md       Phase 2: targeted agent exploration (scale-aware)
 │           ├── map.md           Phase 3: knowledge map synthesis
@@ -77,7 +77,8 @@ neuraltree/
 │           ├── plan.md          Phase 6: reorganization proposals
 │           ├── execute.md       Phase 7: sandbox execution
 │           ├── verify.md        Phase 8: adaptive scoring + wiki lint
-│           └── report.md        Output: before/after comparison
+│           ├── report.md        Output: before/after comparison
+│           └── learn.md         Standalone: record lesson → wiki → Viking → verify
 ├── tests/                       416+ tests passing
 │   ├── conftest.py              Shared fixtures (tmp_project with memory/, docs/, lessons/)
 │   ├── unit/                    13 test files

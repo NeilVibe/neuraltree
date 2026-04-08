@@ -196,13 +196,14 @@ class TestScaleLimits:
         assert result["total_count"] <= 50
 
     def test_score_on_large_project(self, tmp_project_large):
-        """Score a 150-file project (mostly .py). Should handle gracefully."""
+        """Score a 150-file project (mostly .py). Should handle gracefully without knowledge map."""
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project_large),
         })
-        # tmp_project_large has 1 CLAUDE.md + 150 .py files
+        # tmp_project_large has no knowledge map — should return no_map gracefully
         assert "flow_score_partial" in result
-        assert result["flow_score_partial"] >= 0.0
+        assert result.get("no_map") is True
+        assert result["flow_score_partial"] is None
 
     def test_query_scaling_formula(self, tmp_project):
         """Query count scales with indexed_doc_count — more docs = more queries.

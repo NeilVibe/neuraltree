@@ -464,12 +464,12 @@ class TestScoreWithKnowledgeMap:
         assert "connectivity" in result["metrics"]
         assert result["details"]["total_files"] == 50
 
-    def test_score_without_map_returns_error(self, tmp_project):
+    def test_score_without_map_returns_no_map(self, tmp_project):
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
         })
-        assert "error" in result
-        assert "knowledge map" in result["error"].lower()
+        assert result.get("no_map") is True
+        assert result["flow_score_partial"] is None
 
 
 class TestKnowledgeMapRoundTrip:

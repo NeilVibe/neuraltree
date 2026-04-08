@@ -44,39 +44,31 @@ Run wiki_lint to get the structural health assessment:
 ```
 lint_result = neuraltree_wiki_lint(
     project_root=project_root,
-    stale_days=90,
+    max_age_days=90,
 )
 emit(f"Phase 1b: Wiki lint — health={lint_result['health_score']}, "
      f"broken={len(lint_result['broken_links'])}, "
-     f"orphans={len(lint_result['orphans'])}, "
-     f"stale={len(lint_result['stale_files'])}")
+     f"orphans={len(lint_result['orphan_pages'])}, "
+     f"stale={len(lint_result['stale_pages'])}")
 ```
 
-## Step 3: Flow Score
+## Step 3: Flow Score (Baseline)
 
-Score the project's information flow WITHOUT a knowledge map.
-This gives baseline metrics before any changes.
+Score the project's information flow. If no knowledge map exists yet,
+this returns `no_map: true` with null metrics — that's expected on first run.
+The real score comes after Phase 3 (Map).
 
 ```
 score_result = neuraltree_score(
     project_root=project_root,
 )
-emit(f"Phase 1c: Flow score — {score_result.get('flow_score_partial', 'N/A')}")
+if score_result.get("no_map"):
+    emit("Phase 1c: Flow score — N/A (no knowledge map yet, will score after Phase 3)")
+else:
+    emit(f"Phase 1c: Flow score — {score_result.get('flow_score_partial', 'N/A')}")
 ```
 
-## Step 4: Diagnose
-
-Classify what's wrong. Pass Viking results if available.
-
-```
-diagnose_result = neuraltree_diagnose(
-    project_root=project_root,
-    viking_results=lint_result if not DEGRADED_MODE else None,
-)
-emit(f"Phase 1d: Diagnose — {len(diagnose_result.get('issues', []))} issues classified")
-```
-
-## Step 5: Find Dead Files
+## Step 4: Find Dead Files
 
 Find files that nothing references at all.
 
@@ -84,10 +76,10 @@ Find files that nothing references at all.
 dead_result = neuraltree_find_dead(
     project_root=project_root,
 )
-emit(f"Phase 1e: Dead files — {dead_result['total_dead']} unreferenced files")
+emit(f"Phase 1d: Dead files — {dead_result['total_dead']} unreferenced files")
 ```
 
-## Step 6: Semantic Edge Discovery (Viking Precision)
+## Step 5: Semantic Edge Discovery (Viking Precision)
 
 Generate search queries from representative files and run Viking
 precision to discover semantic relationships across the project.
@@ -132,10 +124,39 @@ if not DEGRADED_MODE:
                 "reason": f"Viking similarity: {hit.get('score', 0):.3f}",
             })
 
-    emit(f"Phase 1f: {len(semantic_edges)} semantic edges from Viking precision")
+    emit(f"Phase 1e: {len(semantic_edges)} semantic edges from Viking precision")
+
+    # Identify failed queries (low/no results) for diagnose
+    failed_queries = []
+    for qr in all_precision_results:
+        judgments = qr.get("judgments", [])
+        if not judgments or all(j.get("score", 0) < 0.3 for j in judgments):
+            failed_queries.append({"text": qr.get("query", "")})
 else:
     semantic_edges = None
-    emit("Phase 1f: Skipped (Viking unavailable)")
+    failed_queries = []
+    emit("Phase 1e: Skipped (Viking unavailable)")
+```
+
+## Step 6: Diagnose
+
+Classify what's wrong using failed precision queries.
+Now runs AFTER precision so it has actual query failures to diagnose.
+
+```
+if failed_queries:
+    diagnose_result = neuraltree_diagnose(
+        failed_queries=failed_queries,
+        project_root=project_root,
+        viking_results=[
+            {"query": qr.get("query", ""), "results": [j.get("uri", "") for j in qr.get("judgments", [])]}
+            for qr in all_precision_results
+        ] if not DEGRADED_MODE else None,
+    )
+    emit(f"Phase 1f: Diagnose — {diagnose_result['total_failures']} gap(s) classified: {diagnose_result['gap_counts']}")
+else:
+    diagnose_result = {"diagnoses": [], "gap_counts": {}, "total_failures": 0, "warnings": ["No failed queries to diagnose"]}
+    emit("Phase 1f: Diagnose — no failed queries, all precision results look good")
 ```
 
 ## Step 7: Check Lessons
@@ -146,7 +167,7 @@ Check if we've seen similar issues before.
 lesson_result = neuraltree_lesson_match(
     context=f"Project with {len(knowledge_files)} knowledge files, "
             f"health_score={lint_result.get('health_score', 'unknown')}, "
-            f"orphans={len(lint_result.get('orphans', []))}, "
+            f"orphans={len(lint_result.get('orphan_pages', []))}, "
             f"broken_links={len(lint_result.get('broken_links', []))}",
     project_root=project_root,
 )
@@ -173,10 +194,10 @@ index_results = {
 
 # Identify problem areas for targeted exploration
 problem_dirs = set()
-for orphan in lint_result.get("orphans", []):
-    problem_dirs.add(os.path.dirname(orphan) or ".")
+for orphan in lint_result.get("orphan_pages", []):
+    problem_dirs.add(os.path.dirname(orphan.get("file", "")) or ".")
 for broken in lint_result.get("broken_links", []):
-    problem_dirs.add(os.path.dirname(broken.get("source", "")) or ".")
+    problem_dirs.add(os.path.dirname(broken.get("file", "")) or ".")
 for issue in diagnose_result.get("issues", []):
     for f in issue.get("files", []):
         problem_dirs.add(os.path.dirname(f) or ".")
@@ -187,8 +208,8 @@ Phase 1/8: Index Complete
   Wiki health:    {lint_result.get('health_score', '?')}
   Flow score:     {score_result.get('flow_score_partial', '?')}
   Broken links:   {len(lint_result.get('broken_links', []))}
-  Orphans:        {len(lint_result.get('orphans', []))}
-  Stale files:    {len(lint_result.get('stale_files', []))}
+  Orphans:        {len(lint_result.get('orphan_pages', []))}
+  Stale files:    {len(lint_result.get('stale_pages', []))}
   Dead files:     {dead_result['total_dead']}
   Semantic edges: {len(semantic_edges) if semantic_edges else 0}
   Problem dirs:   {len(problem_dirs)}

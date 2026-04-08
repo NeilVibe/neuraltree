@@ -195,12 +195,13 @@ class TestSizeBalance:
 
 class TestScoreIntegration:
     def test_requires_knowledge_map(self, tmp_project):
-        """Score should error when no knowledge map exists."""
+        """Score should return no_map flag when no knowledge map exists."""
         result = call_tool("neuraltree_score", {
             "project_root": str(tmp_project),
         })
-        assert "error" in result
-        assert "knowledge map" in result["error"].lower()
+        assert result.get("no_map") is True
+        assert result["flow_score_partial"] is None
+        assert all(v is None for v in result["metrics"].values())
 
     def test_with_knowledge_map(self, tmp_project):
         """Score should return all 5 metrics when knowledge map exists."""

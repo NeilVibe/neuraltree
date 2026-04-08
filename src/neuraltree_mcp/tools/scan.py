@@ -17,6 +17,7 @@ def register(mcp: FastMCP) -> None:
         path: str = ".",
         max_files: int = 10000,
         exclude_patterns: list[str] | None = None,
+        summary_only: bool = False,
     ) -> dict:
         """Fast filesystem inventory.
 
@@ -30,9 +31,14 @@ def register(mcp: FastMCP) -> None:
             exclude_patterns: Additional directory prefixes to skip
                 (e.g. [".planning", ".claude/agents", "docs/archive"]).
                 Matched against relative paths from project root.
+            summary_only: If True, return counts and directory tree only —
+                no per-file sizes/dates. Reduces output from ~1MB to ~5KB
+                on large projects.
 
         Returns:
             dict with dirs, files, sizes, dates, empty_dirs, total_count, capped.
+            In summary_only mode: dirs, files, total_count, capped,
+            knowledge_files (filtered .md/.txt list), dir_file_counts.
         """
         try:
             root = validate_project_root(path)
@@ -94,20 +100,46 @@ def register(mcp: FastMCP) -> None:
                 rel = os.path.relpath(full, root)
                 files.append(rel)
 
-                try:
-                    st = os.stat(full)
-                    sizes[rel] = st.st_size
-                    mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-                    dates[rel] = mtime.strftime("%Y-%m-%d")
-                except OSError as e:
-                    sizes[rel] = 0
-                    dates[rel] = "unknown"
-                    warnings.append(f"stat failed for {rel}: {e}")
+                if not summary_only:
+                    try:
+                        st = os.stat(full)
+                        sizes[rel] = st.st_size
+                        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                        dates[rel] = mtime.strftime("%Y-%m-%d")
+                    except OSError as e:
+                        sizes[rel] = 0
+                        dates[rel] = "unknown"
+                        warnings.append(f"stat failed for {rel}: {e}")
 
                 file_count += 1
 
             if capped:
                 break
+
+        if summary_only:
+            # Lightweight output: counts + directory tree + knowledge file list
+            knowledge_files = [
+                f for f in files
+                if f.endswith((".md", ".txt"))
+                and not f.startswith((".pytest_cache/", ".ruff_cache/"))
+            ]
+            # Count files per top-level directory
+            dir_file_counts: dict[str, int] = {}
+            for f in files:
+                top = f.split("/")[0] if "/" in f else "."
+                dir_file_counts[top] = dir_file_counts.get(top, 0) + 1
+
+            return {
+                "files": sorted(files),
+                "dirs": sorted(dirs),
+                "knowledge_files": sorted(knowledge_files),
+                "dir_file_counts": dir_file_counts,
+                "empty_dirs": sorted(empty_dirs),
+                "total_count": file_count,
+                "knowledge_count": len(knowledge_files),
+                "capped": capped,
+                "warnings": warnings,
+            }
 
         return {
             "dirs": sorted(dirs),

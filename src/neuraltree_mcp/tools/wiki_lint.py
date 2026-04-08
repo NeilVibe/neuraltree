@@ -45,16 +45,39 @@ def _is_in_archive(rel_path: str) -> bool:
     return any(part in _ARCHIVE_DIR_NAMES for part in Path(rel_path).parts)
 
 
-def _collect_md_files(root: Path, extensions: list[str] | None = None) -> list[Path]:
-    """Collect all markdown files under root."""
+def _collect_md_files(
+    root: Path,
+    extensions: list[str] | None = None,
+    exclude_dir_prefixes: set[str] | None = None,
+) -> list[Path]:
+    """Collect all markdown files under root.
+
+    Args:
+        root: Project root directory.
+        extensions: File extensions to collect (default [".md"]).
+        exclude_dir_prefixes: Relative directory prefixes to skip entirely
+            (e.g. {".claude/agents", ".planning", ".tribunal"}).
+    """
     exts = extensions or [".md"]
+    excl = exclude_dir_prefixes or set()
     files = []
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
         dp = Path(dirpath)
+        rel_dir = str(dp.relative_to(root)).replace("\\", "/")
+        if rel_dir == ".":
+            rel_dir = ""
+
         # Skip hidden dirs, .git, node_modules, __pycache__, .neuraltree
         if any(part.startswith(".") or part in ("node_modules", "__pycache__") for part in dp.parts):
             if ".git" in dp.parts or ".neuraltree" in dp.parts:
                 continue
+
+        # Skip excluded directory prefixes
+        if excl and rel_dir:
+            if any(rel_dir == e or rel_dir.startswith(e + "/") for e in excl):
+                dirnames.clear()  # don't descend
+                continue
+
         for fn in filenames:
             if any(fn.endswith(ext) for ext in exts):
                 files.append(dp / fn)
@@ -209,7 +232,9 @@ def register(mcp: FastMCP) -> None:
         except ValueError as e:
             return {"error": str(e)}
 
-        files = _collect_md_files(root, extensions)
+        # Convert exclude_dirs to prefix set for file collection
+        excl_prefixes = set(exclude_dirs) if exclude_dirs else set()
+        files = _collect_md_files(root, extensions, excl_prefixes)
         if not files:
             return {
                 "broken_links": [],

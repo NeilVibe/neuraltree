@@ -160,8 +160,14 @@ def register(mcp: FastMCP) -> None:
 
         km = _load_knowledge_map(root)
         if km is None:
-            return {"error": "No knowledge map. Run explore + map first.",
-                    "flow_score_partial": 0.0}
+            return {
+                "metrics": {k: None for k in WEIGHTS},
+                "flow_score_partial": None,
+                "flow_score_weights": WEIGHTS,
+                "details": {"reason": "No knowledge map yet — run map phase first"},
+                "warnings": ["No knowledge map found. Score will be available after Phase 3 (Map)."],
+                "no_map": True,
+            }
         if "error" in km:
             return {"error": f"Knowledge map {km['error']}",
                     "flow_score_partial": 0.0}

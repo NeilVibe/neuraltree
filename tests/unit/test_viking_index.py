@@ -111,7 +111,7 @@ class TestUploadAndIndex:
             "viking://test",
         )
         assert result["status"] == "error"
-        assert "Cannot read file" in result["error"]
+        assert "Upload failed" in result["error"]
 
     def test_connection_error(self, tmp_path):
         import requests
