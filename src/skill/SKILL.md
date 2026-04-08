@@ -111,7 +111,37 @@ These are operations you perform directly (not MCP tools). Use your native capab
 
 ## Section 1: Activation
 
-When `/neuraltree` is invoked, execute these steps in order.
+When `/neuraltree` is invoked, **ALWAYS print the banner first**, then execute steps in order.
+
+### Step 0: Banner
+
+Print this EXACTLY (replace version with frontmatter version):
+
+```
+emit("""
+    _   __                     ________
+   / | / /__  __  _________  / /_  __/_______ ___
+  /  |/ / _ \/ / / / ___/ _ \/ / / / / ___/ _ \/ _ \\
+ / /|  /  __/ /_/ / /  / __ / / / / / /  /  __/  __/
+/_/ |_/\___/\__,_/_/  /_/ /_/_/ /_/ /_/   \___/\___/
+
+  v3.2.0 | 26 tools | 8-phase pipeline + learn
+  by Neil Schmitt — github.com/NeilVibe/neuraltree
+""")
+```
+
+**Version check:** Read `.neuraltree/version_check.json` — if it exists and
+`last_check` is < 24 hours ago, skip. Otherwise, try:
+
+```
+# Fetch latest version tag from GitHub (non-blocking, 3s timeout)
+response = WebFetch("https://api.github.com/repos/NeilVibe/neuraltree/tags?per_page=1")
+# If response has a tag name like "v3.3.0" and it's newer than 3.2.0:
+emit("  UPDATE AVAILABLE: v3.2.0 → v{latest} — git pull && ./install.sh")
+# Save check timestamp to .neuraltree/version_check.json
+```
+
+If the fetch fails (no internet, rate limit), silently continue. Never block activation on a version check.
 
 ### Step 1: Verify Tools
 

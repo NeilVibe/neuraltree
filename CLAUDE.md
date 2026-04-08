@@ -13,7 +13,7 @@
 ## Architecture
 
 ```
-Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — index-first orchestration (v3.1, wiki-compile)
+Skill ([SKILL.md](src/skill/SKILL.md)) = THE BRAIN — index-first orchestration (v3.2, wiki-compile + learn)
 MCP Server (neuraltree-mcp) = THE MUSCLE — 26 tools, 416+ tests
 Viking MCP = THE MEMORY — semantic search + full batch indexing
 Agent Swarm = THE EYES — targeted explorers (problem areas only at scale)
