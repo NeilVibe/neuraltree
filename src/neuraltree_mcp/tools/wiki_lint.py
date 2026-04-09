@@ -298,6 +298,31 @@ def register(mcp: FastMCP) -> None:
             score -= 5
         score = max(0, min(100, score))
 
+        # Flag orphans in programmatic directories
+        _PROGRAMMATIC_DIRS = {
+            ".claude/agents", ".claude/skills", ".claude/plugins",
+            ".planning", "config", "agents", "skills",
+        }
+        programmatic_orphans = 0
+        for orphan in orphans:
+            f = orphan["file"]
+            is_prog = any(
+                f.startswith(d + "/") or ("/" + d + "/") in ("/" + f)
+                for d in _PROGRAMMATIC_DIRS
+            )
+            orphan["likely_programmatic"] = is_prog
+            if is_prog:
+                programmatic_orphans += 1
+
+        warnings = []
+        if programmatic_orphans > 0:
+            warnings.append(
+                f"{programmatic_orphans} orphan pages are in directories typically "
+                f"consumed programmatically (agents, skills, .planning, config). "
+                f"'Orphan' means no markdown links point to them — they may still "
+                f"be actively used by frameworks. Investigate before deleting."
+            )
+
         return {
             "broken_links": broken,
             "orphan_pages": orphans,
@@ -308,6 +333,7 @@ def register(mcp: FastMCP) -> None:
             "total_broken": len(broken),
             "total_orphans": len(orphans),
             "total_stale": len(stale),
+            "programmatic_orphans": programmatic_orphans,
             "trunk_files": sorted(trunk_set),
-            "warnings": [],
+            "warnings": warnings,
         }

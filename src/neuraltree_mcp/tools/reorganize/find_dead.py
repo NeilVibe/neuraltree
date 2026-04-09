@@ -1,4 +1,15 @@
-"""neuraltree_find_dead — Find dead/orphan files."""
+"""neuraltree_find_dead — Find dead/orphan files.
+
+IMPORTANT: "Dead" means "no markdown/config file links to it." It does NOT
+mean "unused." Files may be consumed programmatically by:
+- Python imports (from X import Y)
+- Agent frameworks (subagent_type definitions)
+- GSD/skill systems (.planning/ state files)
+- JSON/YAML config values
+- Dynamic path construction in code
+
+Always investigate HOW a file is consumed before recommending deletion.
+"""
 from __future__ import annotations
 
 import os
@@ -9,6 +20,20 @@ from fastmcp import FastMCP
 from neuraltree_mcp.text_utils import walk_project_files
 from neuraltree_mcp.validation import validate_project_root
 from ._helpers import _KNOWLEDGE_EXTENSIONS, _strip_ref_fragment
+
+# Directories whose files are often consumed programmatically, not via
+# markdown links. Files in these dirs should be flagged with a warning
+# rather than blindly recommended for deletion.
+_PROGRAMMATIC_DIR_PATTERNS = {
+    ".claude/agents",
+    ".claude/skills",
+    ".claude/plugins",
+    ".planning",
+    "node_modules",
+    "config",
+    "agents",
+    "skills",
+}
 
 
 def register(mcp: FastMCP) -> None:
@@ -108,13 +133,39 @@ def register(mcp: FastMCP) -> None:
 
         dead_files.sort(key=lambda x: x["size_lines"])
 
+        # Classify dead files: "likely_programmatic" if they live in dirs
+        # known to be consumed by frameworks rather than markdown links.
+        programmatic_count = 0
+        for df in dead_files:
+            rel = df["path"]
+            is_programmatic = any(
+                rel.startswith(pattern + "/") or ("/" + pattern + "/") in ("/" + rel)
+                for pattern in _PROGRAMMATIC_DIR_PATTERNS
+            )
+            if is_programmatic:
+                df["likely_programmatic"] = True
+                programmatic_count += 1
+            else:
+                df["likely_programmatic"] = False
+
         # Exclude trunk files from denominator (trunk_names defined in Phase 1)
         non_trunk_count = sum(1 for f in all_knowledge if f.name not in trunk_names)
 
-        return {
+        result = {
             "dead_files": dead_files,
             "total_dead": len(dead_files),
             "total_knowledge": non_trunk_count,
             "dead_ratio": len(dead_files) / max(non_trunk_count, 1),
+            "likely_programmatic": programmatic_count,
             "warnings": warnings,
         }
+
+        if programmatic_count > 0:
+            result["warnings"].append(
+                f"{programmatic_count} 'dead' files are in directories typically "
+                f"consumed programmatically (agents, skills, .planning, config). "
+                f"These files may be actively used by frameworks — investigate "
+                f"before recommending deletion."
+            )
+
+        return result

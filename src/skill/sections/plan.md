@@ -12,7 +12,7 @@ For each issue, generate a concrete action:
 | Issue Type | Action |
 |-----------|--------|
 | `unwired` | `neuraltree_wire()` the file, append `## Related` |
-| `orphan` | Wire it OR mark for deletion (user decides) |
+| `orphan` | Wire it. If `likely_programmatic=true`, NEVER delete — investigate how it's consumed first |
 | `too_large` | `neuraltree_plan_split()` or `neuraltree_shrink_and_wire()` |
 | `duplicate` | Merge files, redirect references |
 | `stale` | Update `last_verified` or flag for review |
@@ -54,6 +54,25 @@ for action in actions:
                 "is_alive": trace["is_alive"],
             }
 ```
+
+## Step 3b: Investigate Programmatic Consumption
+
+`neuraltree_trace()` only finds markdown links, backtick paths, and Python
+imports. Files can also be consumed by:
+
+- **Agent frameworks** — `subagent_type` definitions in `.claude/agents/`
+- **GSD/skill systems** — `.planning/` state read by 15+ GSD skill commands
+- **JSON/YAML configs** — filepath strings in config values
+- **Dynamic path construction** — code building paths at runtime
+
+**For any file flagged `likely_programmatic=true` by find_dead or wiki_lint:**
+
+1. Check if the directory is owned by a plugin/framework (don't touch)
+2. `grep -rl "filename"` across ALL file types, not just markdown
+3. Check if a parent tool/skill reads the directory programmatically
+4. If unsure, **wire it** (safe) rather than **delete it** (destructive)
+
+**"Dead" means "no markdown links." It does NOT mean "unused."**
 
 ## Step 4: Present to User
 
