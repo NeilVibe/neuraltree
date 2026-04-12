@@ -67,9 +67,28 @@ def _collect_md_files(
         if rel_dir == ".":
             rel_dir = ""
 
-        # Skip hidden dirs, .git, node_modules, __pycache__, .neuraltree
-        if any(part.startswith(".") or part in ("node_modules", "__pycache__") for part in dp.parts):
-            if ".git" in dp.parts or ".neuraltree" in dp.parts:
+        # Skip non-knowledge dirs: dependencies, build output, caches,
+        # tooling artifacts. These contain .md files that aren't wiki pages.
+        _SKIP_PARTS = {
+            "node_modules", "__pycache__", ".git", ".neuraltree",
+            ".planning", ".tribunal", ".playwright-mcp", ".agents",
+            "htmlcov", "dist", "build", ".svelte-kit", ".vite",
+            ".cache", ".output", "coverage", "vendor",
+        }
+        if any(part in _SKIP_PARTS for part in dp.parts):
+            dirnames.clear()
+            continue
+        # Skip dirs that contain source code (heuristic: has .py/.js/.ts/.svelte siblings)
+        _CODE_EXTS = {".py", ".js", ".ts", ".svelte", ".jsx", ".tsx", ".go", ".rs"}
+        if filenames and not any(fn.endswith(ext) for fn in filenames for ext in (".md",)):
+            # No .md files here at all, skip descending if it's code-heavy
+            pass  # let os.walk skip naturally
+        elif filenames:
+            code_count = sum(1 for fn in filenames if any(fn.endswith(e) for e in _CODE_EXTS))
+            md_count = sum(1 for fn in filenames if fn.endswith(".md"))
+            # If >80% code files and only READMEs, skip — it's a source dir not a wiki
+            if code_count > 5 and md_count <= 1 and code_count > md_count * 5:
+                dirnames.clear()
                 continue
 
         # Skip excluded directory prefixes
@@ -281,26 +300,10 @@ def register(mcp: FastMCP) -> None:
         total_inbound = sum(len(v) for v in inbound.values())
         density = total_inbound / len(files) if files else 0.0
 
-        # Health score (0-100)
-        # Penalties: broken links (-5 each), orphans (-3 each), low density (-20 if <1.0)
-        score = 100
-        score -= min(40, len(broken) * 5)  # cap at -40
-        score -= min(30, len(orphans) * 3)  # cap at -30
-        if density < 1.0:
-            score -= 20
-        elif density < 2.0:
-            score -= 10
-        # Bonus for no stale pages
-        stale_ratio = len(stale) / len(files) if files else 0
-        if stale_ratio > 0.5:
-            score -= 15
-        elif stale_ratio > 0.25:
-            score -= 5
-        score = max(0, min(100, score))
-
-        # Flag orphans in programmatic directories
+        # Flag orphans in programmatic/convention-loaded directories
+        # These are consumed by tools/frameworks, not linked via markdown
         _PROGRAMMATIC_DIRS = {
-            ".claude/agents", ".claude/skills", ".claude/plugins",
+            ".claude",  # All .claude/ files are convention-loaded by Claude
             ".planning", "config", "agents", "skills",
         }
         programmatic_orphans = 0
@@ -313,6 +316,23 @@ def register(mcp: FastMCP) -> None:
             orphan["likely_programmatic"] = is_prog
             if is_prog:
                 programmatic_orphans += 1
+
+        # Health score (0-100)
+        # Only count REAL orphans (not convention-loaded) in the penalty
+        real_orphan_count = len(orphans) - programmatic_orphans
+        score = 100
+        score -= min(40, len(broken) * 5)  # cap at -40
+        score -= min(30, real_orphan_count * 3)  # cap at -30
+        if density < 1.0:
+            score -= 20
+        elif density < 2.0:
+            score -= 10
+        stale_ratio = len(stale) / len(files) if files else 0
+        if stale_ratio > 0.5:
+            score -= 15
+        elif stale_ratio > 0.25:
+            score -= 5
+        score = max(0, min(100, score))
 
         warnings = []
         if programmatic_orphans > 0:
