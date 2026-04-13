@@ -42,6 +42,8 @@ def register(mcp: FastMCP) -> None:
     def neuraltree_find_dead(
         project_root: str = ".",
         extensions: list[str] | None = None,
+        summary_only: bool = False,
+        top_n: int | None = None,
     ) -> dict:
         """Find dead/orphan files that nothing references.
 
@@ -52,9 +54,18 @@ def register(mcp: FastMCP) -> None:
         Args:
             project_root: Project root directory.
             extensions: File extensions to check (default: [".md"]).
+            summary_only: If True, omit the dead_files list and return only
+                counts (total_dead, total_knowledge, dead_ratio,
+                likely_programmatic). Saves ~26K tokens on large projects.
+            top_n: If set (and summary_only=False), return only the N largest
+                dead files instead of all. Useful for sample inspection
+                without flooding context.
 
         Returns:
-            dict with dead_files list, each with path, size_lines, last_modified.
+            dict with total_dead, total_knowledge, dead_ratio,
+            likely_programmatic, warnings. Includes dead_files list unless
+            summary_only=True. If top_n set, dead_files is truncated to
+            top N largest and a 'truncated' flag is included.
         """
         try:
             root = validate_project_root(project_root)
@@ -152,13 +163,22 @@ def register(mcp: FastMCP) -> None:
         non_trunk_count = sum(1 for f in all_knowledge if f.name not in trunk_names)
 
         result = {
-            "dead_files": dead_files,
             "total_dead": len(dead_files),
             "total_knowledge": non_trunk_count,
             "dead_ratio": len(dead_files) / max(non_trunk_count, 1),
             "likely_programmatic": programmatic_count,
             "warnings": warnings,
         }
+
+        if not summary_only:
+            if top_n is not None and top_n >= 0:
+                # Sort by size descending and keep top N largest
+                sorted_files = sorted(dead_files, key=lambda x: -x["size_lines"])
+                result["dead_files"] = sorted_files[:top_n]
+                result["truncated"] = len(dead_files) > top_n
+                result["truncated_returned"] = len(result["dead_files"])
+            else:
+                result["dead_files"] = dead_files
 
         if programmatic_count > 0:
             result["warnings"].append(

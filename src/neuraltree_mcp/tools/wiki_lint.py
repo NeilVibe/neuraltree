@@ -219,6 +219,8 @@ def register(mcp: FastMCP) -> None:
         extensions: list[str] | None = None,
         trunk_paths: list[str] | None = None,
         exclude_dirs: list[str] | None = None,
+        summary_only: bool = False,
+        top_n: int = 0,
     ) -> dict:
         """Lint a markdown wiki for broken links, orphans, and staleness.
 
@@ -241,10 +243,20 @@ def register(mcp: FastMCP) -> None:
                          claude.md, memory.md, index.md, etc.).
             exclude_dirs: Directory names to exclude from orphan detection
                           (default: auto-detects archive, old, deprecated).
+            summary_only: If True, omit broken_links/orphan_pages/stale_pages
+                arrays. Returns only counts + health_score + density. Saves
+                ~11K tokens on large projects with many issues.
+            top_n: When summary_only=False, cap each array at top N entries
+                (0 = no limit, default). Useful for sample inspection
+                without flooding context. stale_pages was already capped
+                at 20; top_n further restricts that.
 
         Returns:
-            dict with broken_links, orphan_pages, stale_pages,
-            cross_ref_density, and overall health_score.
+            dict with cross_ref_density, health_score, total_pages,
+            total_broken, total_orphans, total_stale, programmatic_orphans,
+            warnings. Includes broken_links/orphan_pages/stale_pages/
+            trunk_files arrays unless summary_only=True. If top_n > 0,
+            arrays are truncated and a 'truncated' flag is included.
         """
         try:
             root = validate_project_root(project_root)
@@ -343,10 +355,7 @@ def register(mcp: FastMCP) -> None:
                 f"be actively used by frameworks. Investigate before deleting."
             )
 
-        return {
-            "broken_links": broken,
-            "orphan_pages": orphans,
-            "stale_pages": stale[:20],  # Top 20 stalest
+        base = {
             "cross_ref_density": round(density, 2),
             "health_score": score,
             "total_pages": len(files),
@@ -354,6 +363,26 @@ def register(mcp: FastMCP) -> None:
             "total_orphans": len(orphans),
             "total_stale": len(stale),
             "programmatic_orphans": programmatic_orphans,
-            "trunk_files": sorted(trunk_set),
             "warnings": warnings,
         }
+
+        if summary_only:
+            return base
+
+        stale_limit = min(top_n, 20) if top_n > 0 else 20  # existing cap stays at 20
+        if top_n > 0:
+            base["truncated"] = {
+                "broken_links": len(broken) > top_n,
+                "orphan_pages": len(orphans) > top_n,
+                "stale_pages": len(stale) > stale_limit,
+            }
+            base["broken_links"] = broken[:top_n]
+            base["orphan_pages"] = orphans[:top_n]
+            base["stale_pages"] = stale[:stale_limit]
+        else:
+            base["broken_links"] = broken
+            base["orphan_pages"] = orphans
+            base["stale_pages"] = stale[:stale_limit]
+
+        base["trunk_files"] = sorted(trunk_set)
+        return base

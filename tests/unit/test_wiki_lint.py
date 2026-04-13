@@ -345,6 +345,56 @@ class TestWikiLintTool:
         assert "legacy/old.md" not in orphan_files
 
 
+class TestSummaryAndTopN:
+    """Verify summary_only and top_n keep output context-efficient."""
+
+    @pytest.mark.asyncio
+    async def test_summary_only_omits_arrays(self, mcp_with_lint, wiki_project):
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {"project_root": str(wiki_project), "summary_only": True},
+        )
+        data = json.loads(result.content[0].text)
+        assert "broken_links" not in data
+        assert "orphan_pages" not in data
+        assert "stale_pages" not in data
+        assert "trunk_files" not in data
+        assert "total_broken" in data
+        assert "total_orphans" in data
+        assert "health_score" in data
+
+    @pytest.mark.asyncio
+    async def test_top_n_truncates_and_flags(self, mcp_with_lint, tmp_path):
+        # Build a project with multiple broken links
+        index = tmp_path / "index.md"
+        index.write_text(
+            "# Index\n"
+            "- [a](missing-a.md)\n"
+            "- [b](missing-b.md)\n"
+            "- [c](missing-c.md)\n"
+            "- [d](missing-d.md)\n"
+        )
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {"project_root": str(tmp_path), "top_n": 2},
+        )
+        data = json.loads(result.content[0].text)
+        assert data["total_broken"] == 4
+        assert len(data["broken_links"]) == 2
+        assert data["truncated"]["broken_links"] is True
+
+    @pytest.mark.asyncio
+    async def test_top_n_zero_means_no_limit(self, mcp_with_lint, wiki_project):
+        result = await mcp_with_lint.call_tool(
+            "neuraltree_wiki_lint",
+            {"project_root": str(wiki_project), "top_n": 0},
+        )
+        data = json.loads(result.content[0].text)
+        # Default behavior preserved — full arrays present, no truncated flag
+        assert "broken_links" in data
+        assert "truncated" not in data
+
+
 # --- Helper function tests ---
 
 
