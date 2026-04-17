@@ -156,16 +156,39 @@ def _resolve_link(source: Path, target: str, root: Path) -> Path | None:
     return None
 
 
+def _safe_relative_to(path: Path, root: Path) -> str | None:
+    """Return str(path.relative_to(root)) or None if path is outside root.
+
+    Added 2026-04-18 (ported from .neuraltree-src aa53619) to handle wiki
+    links that resolve to files outside the project root (e.g.
+    `~/.claude/rules/*.md` intentionally referenced from project wikis for
+    cross-project knowledge). Previously raised ValueError which crashed the
+    whole lint run.
+    """
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return None
+
+
 def _check_broken_links(files: list[Path], root: Path) -> list[dict]:
-    """Find all broken internal links."""
+    """Find all broken internal links.
+
+    External-but-resolved links (to files outside project root, e.g.
+    `~/.claude/rules/*.md`) are SKIPPED, not reported as broken. They exist
+    on disk; the wiki_lint scope is the project, not the filesystem.
+    """
     broken = []
     for f in files:
         links = _extract_links(f)
         for link in links:
             resolved = _resolve_link(f, link["target"], root)
             if resolved is None:
+                file_rel = _safe_relative_to(f, root)
+                if file_rel is None:
+                    continue  # source file outside root — shouldn't happen but safe
                 broken.append({
-                    "file": str(f.relative_to(root)),
+                    "file": file_rel,
                     "line": link["line"],
                     "target": link["target"],
                     "link_type": link["type"],
@@ -175,15 +198,23 @@ def _check_broken_links(files: list[Path], root: Path) -> list[dict]:
 
 def _check_inbound_links(files: list[Path], root: Path) -> dict[str, list[str]]:
     """Build inbound link map: target_file -> [source_files]."""
-    inbound: dict[str, list[str]] = {str(f.relative_to(root)): [] for f in files}
+    inbound: dict[str, list[str]] = {}
+    for f in files:
+        rel = _safe_relative_to(f, root)
+        if rel is not None:
+            inbound[rel] = []
 
     for f in files:
-        source_rel = str(f.relative_to(root))
+        source_rel = _safe_relative_to(f, root)
+        if source_rel is None:
+            continue
         links = _extract_links(f)
         for link in links:
             resolved = _resolve_link(f, link["target"], root)
             if resolved is not None:
-                target_rel = str(resolved.relative_to(root))
+                target_rel = _safe_relative_to(resolved, root)
+                if target_rel is None:
+                    continue  # external resolved path — skip for inbound count
                 if target_rel in inbound and source_rel != target_rel:
                     if source_rel not in inbound[target_rel]:
                         inbound[target_rel].append(source_rel)
@@ -201,8 +232,11 @@ def _check_freshness(files: list[Path], root: Path, max_age_days: int) -> list[d
         mtime = f.stat().st_mtime
         if mtime < cutoff:
             age_days = int((time.time() - mtime) / 86400)
+            file_rel = _safe_relative_to(f, root)
+            if file_rel is None:
+                continue
             stale.append({
-                "file": str(f.relative_to(root)),
+                "file": file_rel,
                 "age_days": age_days,
                 "last_modified": mtime,
             })

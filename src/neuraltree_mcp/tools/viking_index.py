@@ -110,7 +110,7 @@ def _upload_and_index(
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def neuraltree_viking_index(
-        file_paths: list[str],
+        file_paths: list[str] | str,
         project_root: str = ".",
         viking_url: str = _DEFAULT_VIKING_URL,
         parent_uri: str | None = None,
@@ -127,6 +127,8 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             file_paths: Relative paths to files to index (relative to project_root).
+                        Accepts list[str] OR a JSON-encoded string of such a list
+                        (some MCP callers serialize array params as strings).
             project_root: Project root directory.
             viking_url: Viking API base URL.
             parent_uri: Base URI for resources (e.g. "viking://resources/myproject").
@@ -141,6 +143,19 @@ def register(mcp: FastMCP) -> None:
             root = validate_project_root(project_root)
         except ValueError as e:
             return {"error": str(e)}
+
+        # Accept JSON string arrays as input — some MCP callers serialize array
+        # params as strings (ported 2026-04-18 from .neuraltree-src aa53619 to
+        # fix array-of-strings rejection).
+        if isinstance(file_paths, str):
+            import json as _json
+            try:
+                parsed = _json.loads(file_paths)
+                if not isinstance(parsed, list) or not all(isinstance(x, str) for x in parsed):
+                    return {"error": "file_paths must be a list of strings (or a JSON array of strings)"}
+                file_paths = parsed
+            except _json.JSONDecodeError as e:
+                return {"error": f"file_paths string is not valid JSON: {e}"}
 
         if not file_paths:
             return {
